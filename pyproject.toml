@@ -1,0 +1,23 @@
+[project]
+name = "agentic-doc-intelligence"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "langgraph",
+    "psycopg2-binary",
+    "pgvector",
+    "sqlalchemy",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx",
+    "anyio[trio]",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
