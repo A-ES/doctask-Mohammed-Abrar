@@ -14,6 +14,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest",
+    "hypothesis",
     "httpx",
     "anyio[trio]",
 ]
