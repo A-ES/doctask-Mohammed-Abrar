@@ -220,7 +220,7 @@ Implement the core PostgreSQL schema for the agentic document-intelligence syste
     - Apply each migration file twice and verify no errors or schema changes on the second application
     - **Validates: Requirements 8.4**
 
-- [-] 13. Final checkpoint - Ensure all tests pass
+- [x] 13. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

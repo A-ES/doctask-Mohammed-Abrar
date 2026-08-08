@@ -15,6 +15,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from sqlalchemy import text
+from sqlalchemy.exc import InternalError
 
 
 # All valid run statuses
@@ -84,6 +85,9 @@ def test_run_status_state_machine(db_session, current_status, new_status):
     if current_status == new_status:
         return
 
+    # Use a savepoint for this iteration
+    savepoint = db_session.begin_nested()
+
     # Create a run already at `current_status`
     run_id = _create_run_with_status(db_session, current_status)
 
@@ -109,16 +113,18 @@ def test_run_status_state_machine(db_session, current_status, new_status):
         )
     else:
         # Invalid transition: should raise an exception
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises((InternalError, Exception)) as exc_info:
             db_session.execute(
                 text("UPDATE runs SET status = :new_status WHERE id = :id"),
                 {"id": str(run_id), "new_status": new_status},
             )
             db_session.flush()
-        db_session.rollback()
 
         # Verify the error message mentions invalid transition
         assert "Invalid run status transition" in str(exc_info.value), (
             f"Expected 'Invalid run status transition' in error for "
             f"'{current_status}' → '{new_status}', got: {exc_info.value}"
         )
+
+    # Rollback this iteration so next one starts fresh
+    savepoint.rollback()

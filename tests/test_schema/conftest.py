@@ -30,7 +30,7 @@ from src.models.base import Base
 settings.register_profile(
     "schema_tests",
     max_examples=100,
-    suppress_health_check=[HealthCheck.too_slow],
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
     deadline=None,
 )
 settings.load_profile("schema_tests")
@@ -183,6 +183,9 @@ def db_session(db_engine, db_session_factory):
 
     This ensures complete isolation between tests with zero cleanup overhead.
     Each test sees a fresh transactional snapshot of the database.
+
+    Tests use nested savepoints (begin_nested()) to isolate individual Hypothesis
+    iterations from each other, preventing aborted-transaction cascades.
     """
     connection = db_engine.connect()
     transaction = connection.begin()

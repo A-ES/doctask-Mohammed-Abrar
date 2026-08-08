@@ -27,6 +27,9 @@ def test_optimistic_concurrency_control(db_session, sample_approval_queue_entry,
     """
     aq_id = sample_approval_queue_entry
 
+    # Use a savepoint per iteration so version resets each time
+    savepoint = db_session.begin_nested()
+
     # --- Step 1: Matching version update (version=1 → version should become 2) ---
     result = db_session.execute(
         text("""
@@ -74,3 +77,6 @@ def test_optimistic_concurrency_control(db_session, sample_approval_queue_entry,
     ).fetchone()
     assert row[0] == 2, f"Expected version still 2 after failed OCC, got {row[0]}"
     assert row[1] == 2, f"Expected priority still 2 after failed OCC, got {row[1]}"
+
+    # Rollback this iteration's changes so next one sees version=1 again
+    savepoint.rollback()

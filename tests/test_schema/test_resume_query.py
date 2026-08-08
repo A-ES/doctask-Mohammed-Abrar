@@ -41,6 +41,9 @@ def test_resume_query_returns_highest_completed_step(db_session, sample_run, ste
     """
     run_id = sample_run
 
+    # Use a savepoint for each iteration's data so it doesn't accumulate
+    savepoint = db_session.begin_nested()
+
     # Insert all run_steps for the sample_run
     for step_order, status in steps:
         db_session.execute(
@@ -89,3 +92,6 @@ def test_resume_query_returns_highest_completed_step(db_session, sample_run, ste
         assert result.status == "completed", (
             f"Expected status='completed' but got status='{result.status}'"
         )
+
+    # Rollback this iteration's inserts so next iteration starts clean
+    savepoint.rollback()

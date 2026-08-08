@@ -14,6 +14,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from sqlalchemy import text
+from sqlalchemy.exc import InternalError
 
 
 # Valid entity types for the audit_events table
@@ -66,9 +67,11 @@ def test_audit_events_reject_update(db_session, entity_type, action):
     Insert an audit_event row, then attempt an UPDATE. The prevent_audit_mutation
     trigger must reject the operation unconditionally.
     """
+    savepoint = db_session.begin_nested()
     event_id = _insert_audit_event(db_session, entity_type, action)
 
-    with pytest.raises(Exception) as exc_info:
+    inner_savepoint = db_session.begin_nested()
+    with pytest.raises((InternalError, Exception)) as exc_info:
         db_session.execute(
             text("""
                 UPDATE audit_events SET actor_id = 'hacker' WHERE id = :id
@@ -77,12 +80,14 @@ def test_audit_events_reject_update(db_session, entity_type, action):
         )
         db_session.flush()
 
-    db_session.rollback()
+    inner_savepoint.rollback()
 
     assert "append-only" in str(exc_info.value).lower(), (
         f"Expected 'append-only' in error for UPDATE on audit_events "
         f"(entity_type={entity_type}, action={action}), got: {exc_info.value}"
     )
+
+    savepoint.rollback()
 
 
 @given(
@@ -95,18 +100,22 @@ def test_audit_events_reject_delete(db_session, entity_type, action):
     Insert an audit_event row, then attempt a DELETE. The prevent_audit_mutation
     trigger must reject the operation unconditionally.
     """
+    savepoint = db_session.begin_nested()
     event_id = _insert_audit_event(db_session, entity_type, action)
 
-    with pytest.raises(Exception) as exc_info:
+    inner_savepoint = db_session.begin_nested()
+    with pytest.raises((InternalError, Exception)) as exc_info:
         db_session.execute(
             text("DELETE FROM audit_events WHERE id = :id"),
             {"id": str(event_id)},
         )
         db_session.flush()
 
-    db_session.rollback()
+    inner_savepoint.rollback()
 
     assert "append-only" in str(exc_info.value).lower(), (
         f"Expected 'append-only' in error for DELETE on audit_events "
         f"(entity_type={entity_type}, action={action}), got: {exc_info.value}"
     )
+
+    savepoint.rollback()

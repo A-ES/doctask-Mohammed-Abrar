@@ -15,10 +15,11 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError, InternalError
 
 
 @given(
-    justification=st.text(min_size=1, max_size=200),
+    justification=st.text(min_size=1, max_size=200).filter(lambda s: "\x00" not in s),
 )
 def test_one_decision_per_queue_entry(db_session, sample_approval_queue_entry, justification):
     """**Validates: Requirements 5.5**
@@ -28,6 +29,9 @@ def test_one_decision_per_queue_entry(db_session, sample_approval_queue_entry, j
     should raise a unique constraint violation (UNIQUE on approval_queue_id).
     """
     aq_id = sample_approval_queue_entry
+
+    # Use a savepoint for this iteration
+    savepoint = db_session.begin_nested()
 
     # Insert the first decision — should succeed
     first_decision_id = uuid.uuid4()
@@ -46,7 +50,8 @@ def test_one_decision_per_queue_entry(db_session, sample_approval_queue_entry, j
 
     # Attempt a second decision on the same approval_queue entry — should raise unique violation
     second_decision_id = uuid.uuid4()
-    with pytest.raises(Exception) as exc_info:
+    inner_savepoint = db_session.begin_nested()
+    with pytest.raises((IntegrityError, InternalError)) as exc_info:
         db_session.execute(
             text("""
                 INSERT INTO decisions (id, approval_queue_id, decision_value, reviewer_id, justification)
@@ -60,7 +65,7 @@ def test_one_decision_per_queue_entry(db_session, sample_approval_queue_entry, j
         )
         db_session.flush()
 
-    db_session.rollback()
+    inner_savepoint.rollback()
 
     # Verify the error is a unique constraint violation
     error_msg = str(exc_info.value).lower()
@@ -68,3 +73,6 @@ def test_one_decision_per_queue_entry(db_session, sample_approval_queue_entry, j
         f"Expected a unique constraint violation when inserting a second decision "
         f"for the same approval_queue_id, got: {exc_info.value}"
     )
+
+    # Rollback the iteration
+    savepoint.rollback()

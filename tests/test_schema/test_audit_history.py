@@ -53,6 +53,9 @@ def test_audit_entity_history_returns_chronological_order(db_session, entity_typ
     timestamps, insert them in shuffled order, and verify that querying with
     ORDER BY event_timestamp returns them in chronological order.
     """
+    # Use a savepoint for this iteration
+    savepoint = db_session.begin_nested()
+
     entity_id = uuid.uuid4()
     base_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
@@ -112,3 +115,6 @@ def test_audit_entity_history_returns_chronological_order(db_session, entity_typ
         assert expected == actual, (
             f"Timestamp mismatch at position {i}: expected {expected}, got {actual}"
         )
+
+    # Rollback this iteration so next one starts clean
+    savepoint.rollback()

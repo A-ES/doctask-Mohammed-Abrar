@@ -34,6 +34,8 @@ def test_source_location_offset_ordering(
     """
     loc_id = uuid.uuid4()
 
+    # Use a savepoint so that constraint violations don't poison the session
+    savepoint = db_session.begin_nested()
     try:
         db_session.execute(
             text("""
@@ -49,6 +51,7 @@ def test_source_location_offset_ordering(
             },
         )
         db_session.flush()
+        savepoint.commit()
 
         # If we got here, insertion succeeded — start must be less than end
         assert start_offset < end_offset, (
@@ -56,7 +59,7 @@ def test_source_location_offset_ordering(
         )
 
     except IntegrityError:
-        db_session.rollback()
+        savepoint.rollback()
 
         # If insertion was rejected, start must be >= end (CHECK constraint violated)
         assert start_offset >= end_offset, (

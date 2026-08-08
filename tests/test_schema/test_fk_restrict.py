@@ -19,7 +19,6 @@ from sqlalchemy.exc import IntegrityError
 
 
 # Define the parent-child relationships to test
-# Each tuple: (parent_table, parent_id_column, description)
 PARENT_CHILD_RELATIONSHIPS = [
     "documents_with_versions",
     "document_versions_with_claims",
@@ -47,33 +46,36 @@ def test_on_delete_restrict_enforcement(
     """
     if relationship == "documents_with_versions":
         # sample_document has sample_document_version as a child
+        inner_savepoint = db_session.begin_nested()
         with pytest.raises(IntegrityError):
             db_session.execute(
                 text("DELETE FROM documents WHERE id = :id"),
                 {"id": str(sample_document)},
             )
             db_session.flush()
-        db_session.rollback()
+        inner_savepoint.rollback()
 
     elif relationship == "document_versions_with_claims":
         # sample_document_version has sample_claim as a child
+        inner_savepoint = db_session.begin_nested()
         with pytest.raises(IntegrityError):
             db_session.execute(
                 text("DELETE FROM document_versions WHERE id = :id"),
                 {"id": str(sample_document_version)},
             )
             db_session.flush()
-        db_session.rollback()
+        inner_savepoint.rollback()
 
     elif relationship == "runs_with_claims":
         # sample_run has sample_claim as a child
+        inner_savepoint = db_session.begin_nested()
         with pytest.raises(IntegrityError):
             db_session.execute(
                 text("DELETE FROM runs WHERE id = :id"),
                 {"id": str(sample_run)},
             )
             db_session.flush()
-        db_session.rollback()
+        inner_savepoint.rollback()
 
     elif relationship == "claims_with_source_locations":
         # Insert a source_location child for sample_claim, then try to delete the claim
@@ -93,21 +95,23 @@ def test_on_delete_restrict_enforcement(
         )
         db_session.flush()
 
+        inner_savepoint = db_session.begin_nested()
         with pytest.raises(IntegrityError):
             db_session.execute(
                 text("DELETE FROM claims WHERE id = :id"),
                 {"id": str(sample_claim)},
             )
             db_session.flush()
-        db_session.rollback()
+        inner_savepoint.rollback()
 
     elif relationship == "claims_with_approval_queue":
         # sample_claim has sample_approval_queue_entry as a child
         # Try to delete the claim (which is referenced by approval_queue)
+        inner_savepoint = db_session.begin_nested()
         with pytest.raises(IntegrityError):
             db_session.execute(
                 text("DELETE FROM claims WHERE id = :id"),
                 {"id": str(sample_claim)},
             )
             db_session.flush()
-        db_session.rollback()
+        inner_savepoint.rollback()

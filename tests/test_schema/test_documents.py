@@ -40,7 +40,9 @@ content_hash_strategy = st.text(
 
 
 @given(
-    mime_type=st.sampled_from(VALID_MIME_TYPES) | st.text(min_size=1, max_size=100),
+    mime_type=st.sampled_from(VALID_MIME_TYPES) | st.text(min_size=1, max_size=100).filter(
+        lambda s: "\x00" not in s
+    ),
 )
 def test_mime_type_validation(db_session, mime_type: str):
     """**Validates: Requirements 1.1, 1.6**
@@ -51,6 +53,7 @@ def test_mime_type_validation(db_session, mime_type: str):
     """
     doc_id = uuid.uuid4()
 
+    savepoint = db_session.begin_nested()
     try:
         db_session.execute(
             text("""
@@ -65,6 +68,7 @@ def test_mime_type_validation(db_session, mime_type: str):
             },
         )
         db_session.flush()
+        savepoint.commit()
 
         # Insertion succeeded — mime_type must be in the allowed list
         assert mime_type in VALID_MIME_TYPES, (
@@ -73,7 +77,7 @@ def test_mime_type_validation(db_session, mime_type: str):
         )
 
     except (IntegrityError, InternalError):
-        db_session.rollback()
+        savepoint.rollback()
 
         # Insertion was rejected — mime_type must NOT be in the allowed list
         assert mime_type not in VALID_MIME_TYPES, (
@@ -88,14 +92,18 @@ def test_mime_type_validation(db_session, mime_type: str):
 
 @given(
     content_hash=content_hash_strategy,
+    version_number=st.integers(min_value=2, max_value=10000),
 )
-def test_content_hash_deduplication(db_session, sample_document, content_hash: str):
+def test_content_hash_deduplication(db_session, sample_document, content_hash: str, version_number: int):
     """**Validates: Requirements 1.3, 7.5**
 
     For any document and content hash, inserting a second document_versions row
     with the same (document_id, content_hash) pair SHALL raise a unique constraint
     violation.
     """
+    # Wrap entire iteration in a savepoint so data doesn't persist
+    outer_savepoint = db_session.begin_nested()
+
     # Insert first version — should always succeed
     version_id_1 = uuid.uuid4()
     db_session.execute(
@@ -108,13 +116,14 @@ def test_content_hash_deduplication(db_session, sample_document, content_hash: s
             "document_id": str(sample_document),
             "content_hash": content_hash,
             "storage_ref": "s3://bucket/first.pdf",
-            "version_number": 1,
+            "version_number": version_number,
         },
     )
     db_session.flush()
 
     # Insert second version with SAME (document_id, content_hash) — must fail
     version_id_2 = uuid.uuid4()
+    inner_savepoint = db_session.begin_nested()
     with pytest.raises((IntegrityError, InternalError)):
         db_session.execute(
             text("""
@@ -126,12 +135,15 @@ def test_content_hash_deduplication(db_session, sample_document, content_hash: s
                 "document_id": str(sample_document),
                 "content_hash": content_hash,
                 "storage_ref": "s3://bucket/second.pdf",
-                "version_number": 2,
+                "version_number": version_number + 1,
             },
         )
         db_session.flush()
 
-    db_session.rollback()
+    inner_savepoint.rollback()
+
+    # Rollback the entire iteration
+    outer_savepoint.rollback()
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +170,9 @@ def test_document_version_immutability(
     For any existing document_versions row, any UPDATE that modifies content_hash
     or storage_ref SHALL be rejected by the immutability trigger.
     """
+    # Wrap entire iteration in a savepoint so data doesn't persist
+    outer_savepoint = db_session.begin_nested()
+
     # Insert a version to attempt modification on
     version_id = uuid.uuid4()
     original_hash = "b" * 64
@@ -183,6 +198,7 @@ def test_document_version_immutability(
         # Skip if the new hash happens to be the same as original
         assume(new_content_hash != original_hash)
 
+        inner_savepoint = db_session.begin_nested()
         with pytest.raises((IntegrityError, InternalError)) as exc_info:
             db_session.execute(
                 text("""
@@ -194,7 +210,7 @@ def test_document_version_immutability(
             )
             db_session.flush()
 
-        db_session.rollback()
+        inner_savepoint.rollback()
         assert "immutable" in str(exc_info.value).lower(), (
             f"Expected 'immutable' in error message, got: {exc_info.value}"
         )
@@ -202,6 +218,7 @@ def test_document_version_immutability(
         # Attempt to change storage_ref
         assume(new_storage_ref != original_ref)
 
+        inner_savepoint = db_session.begin_nested()
         with pytest.raises((IntegrityError, InternalError)) as exc_info:
             db_session.execute(
                 text("""
@@ -213,10 +230,13 @@ def test_document_version_immutability(
             )
             db_session.flush()
 
-        db_session.rollback()
+        inner_savepoint.rollback()
         assert "immutable" in str(exc_info.value).lower(), (
             f"Expected 'immutable' in error message, got: {exc_info.value}"
         )
+
+    # Rollback the entire iteration
+    outer_savepoint.rollback()
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +255,9 @@ def test_composite_unique_document_version_number(
     For any (document_id, version_number) pair in document_versions, inserting a
     duplicate combination SHALL raise a unique constraint violation.
     """
+    # Wrap entire iteration in a savepoint so data doesn't persist
+    outer_savepoint = db_session.begin_nested()
+
     # Insert first version with the given version_number
     version_id_1 = uuid.uuid4()
     hash_1 = uuid.uuid4().hex + uuid.uuid4().hex  # 64-char unique hex string
@@ -258,6 +281,7 @@ def test_composite_unique_document_version_number(
     version_id_2 = uuid.uuid4()
     hash_2 = uuid.uuid4().hex + uuid.uuid4().hex  # Different hash
 
+    inner_savepoint = db_session.begin_nested()
     with pytest.raises((IntegrityError, InternalError)):
         db_session.execute(
             text("""
@@ -274,4 +298,7 @@ def test_composite_unique_document_version_number(
         )
         db_session.flush()
 
-    db_session.rollback()
+    inner_savepoint.rollback()
+
+    # Rollback the entire iteration
+    outer_savepoint.rollback()
