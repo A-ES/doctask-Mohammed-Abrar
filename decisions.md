@@ -17,3 +17,17 @@
 
 **Why?**  
 Purpose-built for exactly the floor requirements: typed persistent state, checkpointers (kill mid-run → resume from last checkpoint is a first-class feature, not something you bolt on), conditional edges for retry/skip/escalate, and interrupt() nodes designed specifically for human-in-the-loop gates that pause and resume execution.
+
+## 2026-08-08 – Core Postgres schema
+
+**Decision:** Adopt the full schema defined in the Requirements Document (documents, document_versions, claims, source_locations, runs, run_steps, approval_queue, decisions, audit_events).
+
+**Why:**
+- Every claim must be traceable to an exact source location → mandatory source_locations + foreign keys.
+- Killed runs must resume cleanly → explicit runs + run_steps with status machine.
+- Concurrent runs must not corrupt each other → run_id scoping on claims + optimistic version columns.
+- Full “what changed, when, why” → append-only audit_events written in the same transaction as the change.
+- Human approve/reject is item-by-item and durable → approval_queue + decisions with uniqueness constraints.
+
+**Alternatives considered:**  
+Simpler “current state only” tables, soft deletes, or reconstructing history from logs. Rejected because they fail the auditability and resumability requirements.
