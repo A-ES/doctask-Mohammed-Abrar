@@ -1,6 +1,7 @@
 """FastAPI router for pipeline run management.
 
-Provides endpoints to create new pipeline runs and resume interrupted runs.
+Provides endpoints to create new pipeline runs, resume interrupted runs,
+and query run history (backed by the audit_events table).
 Uses dependency injection for the database layer to support testing without
 a real database or LangGraph runtime.
 
@@ -8,12 +9,15 @@ Requirements: 6.3, 5.3
 """
 
 import uuid
+from dataclasses import asdict
+from datetime import datetime
 from typing import Any, Optional, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.pipeline.config import load_config
+from src.pipeline.history import HistoryStore, RunHistory, get_run_history
 from src.pipeline.resume import (
     ResumeFromBeginning,
     ResumeLockError,
@@ -51,6 +55,28 @@ class ResumeRunResponse(BaseModel):
     next_node: str | None = None
 
 
+class HistoryEntryResponse(BaseModel):
+    """A single event in run history."""
+
+    event_id: str
+    timestamp: str
+    entity_type: str
+    entity_id: str
+    action: str
+    actor_id: str
+    source_document_id: str | None = None
+    previous_state: dict[str, Any] | None = None
+    new_state: dict[str, Any]
+
+
+class RunHistoryResponse(BaseModel):
+    """Complete ordered history for a pipeline run."""
+
+    run_id: str
+    entries: list[HistoryEntryResponse]
+    total: int
+
+
 # --- Database store protocol ---
 
 
@@ -79,6 +105,7 @@ class RunStore(Protocol):
 
 _run_store: Optional[Any] = None
 _resume_store: Optional[Any] = None
+_history_store: Optional[Any] = None
 
 
 def set_run_store(store: Any) -> None:
@@ -91,6 +118,12 @@ def set_resume_store(store: Any) -> None:
     """Set the resume store implementation (for testing/configuration)."""
     global _resume_store
     _resume_store = store
+
+
+def set_history_store(store: Any) -> None:
+    """Set the history store implementation (for testing/configuration)."""
+    global _history_store
+    _history_store = store
 
 
 def get_run_store() -> Any:
@@ -111,6 +144,16 @@ def get_resume_store() -> Any:
             detail="Resume store not configured",
         )
     return _resume_store
+
+
+def get_history_store() -> Any:
+    """Get the current history store implementation."""
+    if _history_store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="History store not configured",
+        )
+    return _history_store
 
 
 # --- Router ---
@@ -196,4 +239,44 @@ def resume_run_endpoint(
         status="resumed",
         resumed_from=result.resumed_from_step,
         next_node=result.next_node,
+    )
+
+
+@router.get("/{run_id}/history", response_model=RunHistoryResponse)
+def get_run_history_endpoint(
+    run_id: str,
+    store: Any = Depends(get_history_store),
+) -> RunHistoryResponse:
+    """Get the full change history for a pipeline run.
+
+    Returns an ordered list of all changes that occurred during this run,
+    backed by the audit_events table. Each entry answers: what changed,
+    when, and because of which source document.
+
+    Events are returned in chronological order (oldest first).
+
+    This does NOT reconstruct history from logs — it reads directly from
+    the append-only audit trail populated during pipeline execution.
+    """
+    history = get_run_history(store=store, run_id=run_id)
+
+    entries = [
+        HistoryEntryResponse(
+            event_id=entry.event_id,
+            timestamp=entry.timestamp.isoformat(),
+            entity_type=entry.entity_type,
+            entity_id=entry.entity_id,
+            action=entry.action,
+            actor_id=entry.actor_id,
+            source_document_id=entry.source_document_id,
+            previous_state=entry.previous_state,
+            new_state=entry.new_state,
+        )
+        for entry in history.entries
+    ]
+
+    return RunHistoryResponse(
+        run_id=run_id,
+        entries=entries,
+        total=history.total,
     )
