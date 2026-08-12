@@ -61,3 +61,42 @@ Simpler “current state only” tables, soft deletes, or reconstructing history
 - Python plugin system (register callable per rule). Rejected: violates the "no .py changes for new rules" constraint.
 - Single evaluator for all rules. Rejected: some rules (rate comparisons) benefit from deterministic structured checks without LLM latency/cost.
 - Replacing `match_rules` entirely. Rejected: claim-scope rules and source-scope rules need different evidence; both perspectives are valid.
+
+
+## 2026-08-12 – Extraction brittleness: LLM-based extraction as default
+
+**Decision (PENDING):** Make LLM-based extraction the default strategy for all extractors, keeping regex/structured matching only as an optional fast-path for fields with genuinely fixed, template-mandated formats.
+
+**Evidence (from `tests/test_paraphrased_extraction.py`):**
+
+A paraphrased pile expressing identical facts (same rate, same parties, same tenure, same conflicts) but with natural language variation produced:
+
+| Document Type | Template Coverage | Paraphrased Coverage | Gap |
+|---|---|---|---|
+| Loan Agreement | 9/9 (100%) | 3/18 across 2 docs (17%) | 83% fields missed |
+| Modification | 2 changes found | 0 changes found | 100% missed |
+| Repayment (tabular) | 3 rows | 3 rows | ✓ (table format preserved) |
+| Repayment (narrative) | 3 rows | 0 rows | 100% missed |
+
+The regex extractors succeed only when documents follow the exact phrasing the patterns were written for. Natural rewording — "a sum of one lakh fifty thousand rupees (INR 150,000.00) as the loan corpus" instead of "Principal Amount: ₹1,50,000" — breaks extraction entirely.
+
+**Why this is the same problem already solved in rules checking:**
+
+The rules checking stage already made this transition: LLM is the default evaluator (handles open-ended language), structured checks are opt-in for simple numeric patterns like "rate > 36%". The extraction stage should follow the same architecture:
+- LLM extraction as default — handles arbitrary phrasing
+- Regex/structured as `extraction_method: structured` opt-in per field, only when the document format is genuinely template-mandated (e.g., regulatory filings with fixed column headers)
+
+**Fields where regex fast-path remains appropriate:**
+- Repayment statement rows when in standard pipe/tab-delimited table format
+- Monetary values that appear in a known fixed template (e.g., bank-generated statements)
+
+**Fields where LLM extraction is required:**
+- Borrower/lender names in narrative text
+- Interest rates embedded in legal prose
+- Tenure/term stated in words ("twenty-four calendar months")
+- Processing fees described indirectly ("administrative charge amounting to...")
+- Any modification agreement in letter format
+
+**Alternatives considered:**
+- Adding more regex patterns. Rejected: infinite regression — each new phrasing requires new patterns, and the combinatorial space of natural language is unbounded.
+- Hybrid approach (regex first, LLM fallback). Considered viable but adds complexity. Simpler to default to LLM and use regex only where speed/determinism is critical.
