@@ -17,10 +17,13 @@ from src.pipeline.graph import ENTRY_POINT, NODES, PATH_MAPS
 EXPECTED_NODES = {
     "ingest",
     "extract_text",
+    "classify_document",
     "chunk",
     "embed",
     "extract_claims",
     "match_rules",
+    "match_rules_against_sources",
+    "merge_findings",
     "score_confidence",
     "route_to_queue",
     "human_review",
@@ -34,13 +37,13 @@ TERMINAL_TARGETS = {"__end__", "__failed__"}
 class TestPathMaps:
     """Tests for the PATH_MAPS constant."""
 
-    def test_path_maps_contains_all_10_nodes(self):
+    def test_path_maps_contains_all_13_nodes(self):
         """PATH_MAPS has an entry for every node in the pipeline."""
         assert set(PATH_MAPS.keys()) == EXPECTED_NODES
 
-    def test_path_maps_has_exactly_10_entries(self):
-        """PATH_MAPS has exactly 10 source node entries."""
-        assert len(PATH_MAPS) == 10
+    def test_path_maps_has_exactly_13_entries(self):
+        """PATH_MAPS has exactly 13 source node entries."""
+        assert len(PATH_MAPS) == 13
 
     def test_all_path_map_targets_are_valid(self):
         """Every target in every path map is either a known node or a terminal."""
@@ -62,9 +65,17 @@ class TestPathMaps:
     def test_extract_text_path_map(self):
         """Extract text supports next, retry, and escalate."""
         assert PATH_MAPS["extract_text"] == {
-            "next": "chunk",
+            "next": "classify_document",
             "retry": "extract_text",
             "escalate": "route_to_queue",
+        }
+
+    def test_classify_document_path_map(self):
+        """Classify document supports next, retry, and escalate."""
+        assert PATH_MAPS["classify_document"] == {
+            "next": "chunk",
+            "escalate": "route_to_queue",
+            "retry": "classify_document",
         }
 
     def test_chunk_path_map(self):
@@ -93,9 +104,9 @@ class TestPathMaps:
 class TestNodes:
     """Tests for the NODES registry."""
 
-    def test_nodes_has_exactly_10_entries(self):
-        """NODES dict has exactly 10 node function entries."""
-        assert len(NODES) == 10
+    def test_nodes_has_exactly_13_entries(self):
+        """NODES dict has exactly 13 node function entries."""
+        assert len(NODES) == 13
 
     def test_nodes_contains_all_expected_names(self):
         """NODES contains all expected pipeline node names."""
@@ -129,17 +140,20 @@ class TestGraphTopology:
     """Tests for overall graph topology correctness."""
 
     def test_nominal_path_is_reachable(self):
-        """The nominal (happy path) traversal visits all 10 nodes in order.
+        """The nominal (happy path) traversal visits all 11 nodes in order.
 
         Starting from ingest, following 'next' decisions reaches finalize.
         """
         nominal_order = [
             "ingest",
             "extract_text",
+            "classify_document",
             "chunk",
             "embed",
             "extract_claims",
             "match_rules",
+            "match_rules_against_sources",
+            "merge_findings",
             "score_confidence",
             "route_to_queue",
         ]

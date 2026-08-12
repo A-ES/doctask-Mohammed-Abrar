@@ -22,6 +22,7 @@ from src.pipeline.state import (
 ALL_NODE_NAMES = [
     "ingest",
     "extract_text",
+    "classify_document",
     "chunk",
     "embed",
     "extract_claims",
@@ -36,6 +37,7 @@ ALL_NODE_NAMES = [
 VALID_DECISIONS: dict[str, set[str]] = {
     "ingest": {"next", "escalate"},
     "extract_text": {"next", "retry", "escalate"},
+    "classify_document": {"next", "retry", "escalate"},
     "chunk": {"next", "escalate"},
     "embed": {"next", "retry", "escalate"},
     "extract_claims": {"next", "retry", "escalate"},
@@ -49,6 +51,7 @@ VALID_DECISIONS: dict[str, set[str]] = {
 # Nodes that support retry (transient error → retry when below max_retries)
 RETRYABLE_NODES = [
     "extract_text",
+    "classify_document",
     "embed",
     "extract_claims",
     "match_rules",

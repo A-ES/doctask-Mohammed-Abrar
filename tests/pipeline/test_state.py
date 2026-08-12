@@ -103,12 +103,27 @@ class TestCreateInitialState:
             "extracted_text",
             "chunks",
             "embeddings_stored",
+            "classification_label",
+            "classification_confidence",
+            "classification_scores",
             "claims",
             "verdicts",
+            "playbook_id",
+            "source_rules",
+            "claims_rules",
+            "findings",
+            "claim_findings",
+            "source_findings",
             "queue_buckets",
             "decisions",
         }
         assert set(state.keys()) == expected_keys
+
+    def test_classification_defaults(self, default_config: PipelineConfig):
+        state = create_initial_state("r", "d", "v", default_config)
+        assert state["classification_label"] is None
+        assert state["classification_confidence"] is None
+        assert state["classification_scores"] is None
 
 
 class TestTypedDictStructures:

@@ -118,9 +118,22 @@ class PipelineState(TypedDict):
     chunks: list[ChunkEntry]
     embeddings_stored: bool
 
+    # Classification outputs (from classify_document node)
+    classification_label: Optional[str]  # DocumentType value
+    classification_confidence: Optional[float]  # 0.0–1.0
+    classification_scores: Optional[dict[str, float]]  # per-label scores
+
     # Examine Stage outputs
     claims: list[ExtractionResult]
     verdicts: list[ComplianceVerdict]
+
+    # Rules Checking Stage outputs
+    playbook_id: Optional[str]  # Set at run init, stored on run record
+    source_rules: list[dict]  # Rules routed to match_rules_against_sources
+    claims_rules: list[dict]  # Rules routed to match_rules
+    findings: list[dict]  # Merged findings from both rule-checking nodes
+    claim_findings: list[dict]  # Findings from match_rules (claims-based)
+    source_findings: list[dict]  # Findings from match_rules_against_sources (span-based)
 
     # Stay-Alive Stage outputs
     queue_buckets: QueueBuckets
@@ -169,9 +182,20 @@ def create_initial_state(
         extracted_text=None,
         chunks=[],
         embeddings_stored=False,
+        # Classification outputs
+        classification_label=None,
+        classification_confidence=None,
+        classification_scores=None,
         # Examine Stage outputs
         claims=[],
         verdicts=[],
+        # Rules Checking Stage outputs
+        playbook_id=None,
+        source_rules=[],
+        claims_rules=[],
+        findings=[],
+        claim_findings=[],
+        source_findings=[],
         # Stay-Alive Stage outputs
         queue_buckets=QueueBuckets(
             auto_approve=[],

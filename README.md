@@ -9,7 +9,10 @@ Document intelligence pipeline for synthetic microfinance and consumer loan comp
 
 ## Architecture
 
-- **Pipeline:** LangGraph StateGraph with 10 nodes across 3 stages (Understand → Examine → Stay-Alive)
+- **Pipeline:** LangGraph StateGraph with 13 nodes across 3 stages (Understand → Examine → Stay-Alive)
+- **Classification:** `classify_document` node routes to type-specific extractors (loan, modification, repayment)
+- **Extraction:** Regex-based extractors produce `ExtractedFact` with `SourceSpan` provenance pointers
+- **Rules Checking:** YAML-driven compliance rules evaluated via LLM (default) or structured checks; parallel `match_rules` + `match_rules_against_sources` fan-out
 - **Persistence:** PostgreSQL 16 + pgvector; all run state checkpointed as JSONB
 - **Resumability:** Per-node checkpoints with advisory locks; killed runs resume from last completed step
 - **Routing:** Conditional edges with retry (bounded), skip, and escalate logic
@@ -20,24 +23,41 @@ Document intelligence pipeline for synthetic microfinance and consumer loan comp
 ## Project Structure
 
 ```
+├── rules/                   # YAML compliance playbooks (no .py edits to add rules)
 ├── migrations/              # Sequential SQL migrations (001–007)
+├── docs/
+│   └── invariants.md        # System invariants (resumability, concurrency, approval)
 ├── src/
 │   ├── models/              # SQLAlchemy declarative models (10 tables)
 │   ├── pipeline/
-│   │   ├── nodes/           # 10 async pipeline nodes
+│   │   ├── nodes/           # 13 async pipeline nodes (incl. classify_document, match_rules_against_sources, merge_findings)
+│   │   ├── extractors/      # Type-specific extractors (loan, modification, repayment) + registry
 │   │   ├── state.py         # PipelineState TypedDict + factory
 │   │   ├── config.py        # Config loader with validation
 │   │   ├── routing.py       # Conditional edge routing functions
+│   │   ├── playbook.py      # Pydantic playbook schema, loader, rule partitioner
+│   │   ├── evaluators.py    # RuleEvaluator protocol, LLM + structured implementations
+│   │   ├── findings.py      # CitedSpan, EvaluationResult, Finding dataclasses
+│   │   ├── source_linker.py # SourceLinker + persist_fact
 │   │   ├── serialization.py # JSONB round-trip (bytes ↔ base64)
 │   │   ├── checkpoint.py    # Per-node checkpoint persistence
 │   │   ├── resume.py        # Kill-and-resume logic
-│   │   ├── graph.py         # StateGraph assembly
+│   │   ├── executor.py      # ResumableExecutor — checkpointed sequential runner
+│   │   ├── stores.py        # ThreadSafeCheckpointStore (concurrent execution)
+│   │   ├── approval.py      # Approval gate service + in-memory store
+│   │   ├── approval_api.py  # REST endpoints for programmatic approve/reject
+│   │   ├── graph.py         # StateGraph assembly (13 nodes + fan-out)
 │   │   ├── api.py           # FastAPI endpoints (POST /runs, /runs/{id}/resume)
 │   │   └── polling.py       # Human review polling service
 │   └── main.py              # FastAPI entrypoint
 ├── tests/
 │   ├── test_schema/         # Schema property tests (14 properties)
-│   └── pipeline/            # Pipeline tests (489 tests, 16 PBT properties)
+│   ├── pipeline/            # Pipeline tests (870+ tests, 25 PBT properties)
+│   ├── microfinance/        # Microfinance extraction property tests (20 properties) + E2E provenance
+│   ├── synthetic/           # Synthetic document generator + tests
+│   ├── test_resumability.py # Kill-and-resume invariant tests
+│   ├── test_concurrency.py  # Concurrent run isolation tests
+│   └── test_approval_gate.py # Approval gate endpoint + independence tests
 ├── docker-compose.yml       # PostgreSQL 16 + pgvector
 └── pyproject.toml
 ```
@@ -47,10 +67,15 @@ Document intelligence pipeline for synthetic microfinance and consumer loan comp
 - [x] Core PostgreSQL schema (7 migrations, 10 tables, triggers, indexes)
 - [x] SQLAlchemy models with OCC
 - [x] Schema property tests (14 properties, all passing)
-- [x] **LangGraph pipeline implementation** (10 nodes, routing, checkpoint, resume)
+- [x] **LangGraph pipeline implementation** (11 nodes, routing, checkpoint, resume)
 - [x] **Pipeline property tests** (16 correctness properties via Hypothesis)
+- [x] **Microfinance ingestion pipeline** (classify → extract → source-link, 20 properties, 807 tests)
 - [x] **FastAPI endpoints** (run creation, resume)
 - [x] **Polling service** (decision completeness checks, reminders)
+- [x] **Checkpointed resumability** (executor with kill-and-resume, tested)
+- [x] **Concurrent run isolation** (per-run_id locking, thread-safe store, tested)
+- [x] **Approval gate** (programmatic REST approve/reject, queue independence, tested)
+- [x] **Rules checking stage** (YAML playbooks, LLM + structured evaluators, 58 tests, 9 PBT properties)
 - [ ] LangGraph runtime integration (requires `langgraph` package)
 - [ ] MCP + React UI + cost tracking
 

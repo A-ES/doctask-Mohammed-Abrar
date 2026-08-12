@@ -39,6 +39,9 @@ class Claim(Base):
     source_locations: Mapped[list["SourceLocation"]] = relationship(
         back_populates="claim", cascade="all, delete-orphan"
     )
+    approval_queue_entries: Mapped[list["ApprovalQueue"]] = relationship(
+        back_populates="claim"
+    )
 
 
 class SourceLocation(Base):

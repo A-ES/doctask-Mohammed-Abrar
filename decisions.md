@@ -31,3 +31,33 @@ Purpose-built for exactly the floor requirements: typed persistent state, checkp
 
 **Alternatives considered:**  
 Simpler “current state only” tables, soft deletes, or reconstructing history from logs. Rejected because they fail the auditability and resumability requirements.
+
+
+## 2026-08-12 – Microfinance ingestion pipeline: type-specific extraction
+
+**Decision:** Add a `classify_document` node between `extract_text` and `chunk` that routes to type-specific extractors (loan, modification, repayment) via a strategy registry.
+
+**Why:**
+- Classification must happen before chunking because document type determines optimal chunk boundaries (clause-level for loans, row-level for repayments).
+- Strategy pattern with a registry means new document types are added by implementing one class and registering it — no graph wiring changes.
+- Each extractor produces `ExtractedFact` with `SourceSpan`, enabling end-to-end provenance (every fact links to exact character offsets in source text).
+
+**Alternatives considered:**
+- Extending `extract_claims` to do classification inline. Rejected: chunking strategy depends on type, so classification must precede it.
+- Single generic extractor for all types. Rejected: domain-specific field sets and normalization rules differ too much between loan agreements, modifications, and repayment statements.
+
+
+## 2026-08-12 – Rules checking stage: YAML-driven compliance playbooks
+
+**Decision:** Add a parallel `match_rules_against_sources` node that evaluates compliance rules defined entirely in YAML, with LLM as default evaluator and structured checks as opt-in.
+
+**Why:**
+- Hard requirement: adding a rule must never touch `.py` files. YAML playbooks achieve this — new rules are a file edit, reviewed in git diff.
+- Parallel fan-out (existing `match_rules` for claims + new node for source spans) catches violations from both angles without serializing evaluation.
+- LLM default handles open-ended regulatory language; `check_type: structured` opt-in gives determinism/speed for simple numeric comparisons.
+- `playbook_id` whitelist prevents path traversal and makes playbook selection an auditable per-run choice.
+
+**Alternatives considered:**
+- Python plugin system (register callable per rule). Rejected: violates the "no .py changes for new rules" constraint.
+- Single evaluator for all rules. Rejected: some rules (rate comparisons) benefit from deterministic structured checks without LLM latency/cost.
+- Replacing `match_rules` entirely. Rejected: claim-scope rules and source-scope rules need different evidence; both perspectives are valid.

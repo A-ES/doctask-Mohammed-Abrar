@@ -66,3 +66,31 @@ These invariants are absolute — violations are treated as system bugs, never a
    - The queue must be drivable programmatically (REST endpoint), not only
      via UI. A program must be able to approve/reject items without human
      interaction.
+
+## Finding Integrity (Rules Checking Stage)
+
+6. **Findings are produced if and only if a rule evaluation returns verdict
+   "fail".** The rules checking stage never pads, forces, or synthesizes
+   findings. Specifically:
+
+   - A Finding is produced only when `verdict == "fail"`. Verdicts of
+     `pass`, `not_applicable`, or `insufficient_evidence` never produce
+     findings.
+   - When no rules are violated, the findings list is empty — never
+     populated with synthetic entries.
+   - Every Finding carries the exact source span (start_offset, end_offset,
+     text) that triggered the violation. Offsets are absolute positions in
+     the original document.
+   - Every Finding records the evaluation_method ("llm" or "structured")
+     that produced it.
+
+7. **Adding a compliance rule never requires modifying Python source files.**
+   New rules are added by editing YAML playbook files under `rules/`. The
+   pipeline evaluates any rule present in a valid playbook without code
+   changes. This is validated by test (`test_extensibility.py`).
+
+8. **Rule evaluation errors are correctly classified.** LLM API failures
+   produce transient errors (retryable). Unknown playbook IDs or invalid
+   YAML produce permanent errors (stop immediately). Zero applicable rules
+   or zero source spans produce empty findings with status "completed" — 
+   never an error state.

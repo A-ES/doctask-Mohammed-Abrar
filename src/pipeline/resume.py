@@ -20,6 +20,7 @@ from src.pipeline.state import PipelineState
 NODE_ORDER: list[str] = [
     "ingest",
     "extract_text",
+    "classify_document",
     "chunk",
     "embed",
     "extract_claims",

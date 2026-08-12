@@ -140,6 +140,61 @@ class TestExtractTextRouting:
 
 
 # ============================================================
+# classify_document: next / retry / escalate (with unclassified check)
+# ============================================================
+
+
+class TestClassifyDocumentRouting:
+    """Tests for classify_document node routing."""
+
+    def test_completed_classified_returns_next(self, config: PipelineConfig) -> None:
+        """Completed with a valid classification label → next (chunk)."""
+        route = make_routing_fn("classify_document", config)
+        state = _make_state(node_status="completed")
+        state["classification_label"] = "loan_agreement"  # type: ignore[typeddict-item]
+        assert route(state) == "next"
+
+    def test_completed_unclassified_returns_escalate(self, config: PipelineConfig) -> None:
+        """Completed with 'unclassified' label → escalate (route_to_queue)."""
+        route = make_routing_fn("classify_document", config)
+        state = _make_state(node_status="completed")
+        state["classification_label"] = "unclassified"  # type: ignore[typeddict-item]
+        assert route(state) == "escalate"
+
+    def test_transient_error_below_max_returns_retry(
+        self, config: PipelineConfig
+    ) -> None:
+        route = make_routing_fn("classify_document", config)
+        state = _make_state(
+            node_status="error",
+            error_type="transient",
+            retries={"classify_document": 2},  # max is 3, so 2 < 3 → retry
+        )
+        assert route(state) == "retry"
+
+    def test_transient_error_at_max_returns_escalate(
+        self, config: PipelineConfig
+    ) -> None:
+        route = make_routing_fn("classify_document", config)
+        state = _make_state(
+            node_status="error",
+            error_type="transient",
+            retries={"classify_document": 3},  # max is 3, so 3 >= 3 → escalate
+        )
+        assert route(state) == "escalate"
+
+    def test_permanent_error_returns_escalate(self, config: PipelineConfig) -> None:
+        route = make_routing_fn("classify_document", config)
+        state = _make_state(node_status="error", error_type="permanent")
+        assert route(state) == "escalate"
+
+    def test_unhandled_status_returns_escalate(self, config: PipelineConfig) -> None:
+        route = make_routing_fn("classify_document", config)
+        state = _make_state(node_status="something_weird")  # type: ignore[arg-type]
+        assert route(state) == "escalate"
+
+
+# ============================================================
 # chunk: next only (completed/skipped → next, error → escalate)
 # ============================================================
 

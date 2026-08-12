@@ -1,9 +1,9 @@
 """Pipeline graph assembly — registers all nodes and conditional edges.
 
-Builds the LangGraph StateGraph with all 10 pipeline nodes and conditional
+Builds the LangGraph StateGraph with all 13 pipeline nodes and conditional
 routing edges. Handles graceful degradation when langgraph is not installed.
 
-Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6
+Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 2.2
 """
 
 from __future__ import annotations
@@ -17,10 +17,13 @@ from src.pipeline.state import PipelineConfig, PipelineState
 # Node imports
 from src.pipeline.nodes.ingest import ingest
 from src.pipeline.nodes.extract_text import extract_text
+from src.pipeline.nodes.classify_document import classify_document
 from src.pipeline.nodes.chunk import chunk
 from src.pipeline.nodes.embed import embed
 from src.pipeline.nodes.extract_claims import extract_claims
 from src.pipeline.nodes.match_rules import match_rules
+from src.pipeline.nodes.match_rules_against_sources import match_rules_against_sources
+from src.pipeline.nodes.merge_findings import merge_findings
 from src.pipeline.nodes.score_confidence import score_confidence
 from src.pipeline.nodes.route_to_queue import route_to_queue
 from src.pipeline.nodes.human_review import human_review
@@ -31,9 +34,14 @@ from src.pipeline.nodes.finalize import finalize
 PATH_MAPS: dict[str, dict[str, str]] = {
     "ingest": {"next": "extract_text", "escalate": "route_to_queue"},
     "extract_text": {
-        "next": "chunk",
+        "next": "classify_document",
         "retry": "extract_text",
         "escalate": "route_to_queue",
+    },
+    "classify_document": {
+        "next": "chunk",
+        "escalate": "route_to_queue",
+        "retry": "classify_document",
     },
     "chunk": {"next": "embed", "escalate": "route_to_queue"},
     "embed": {
@@ -47,8 +55,17 @@ PATH_MAPS: dict[str, dict[str, str]] = {
         "escalate": "route_to_queue",
     },
     "match_rules": {
-        "next": "score_confidence",
+        "next": "match_rules_against_sources",
         "retry": "match_rules",
+        "escalate": "route_to_queue",
+    },
+    "match_rules_against_sources": {
+        "next": "merge_findings",
+        "retry": "match_rules_against_sources",
+        "escalate": "route_to_queue",
+    },
+    "merge_findings": {
+        "next": "score_confidence",
         "escalate": "route_to_queue",
     },
     "score_confidence": {
@@ -69,10 +86,13 @@ PATH_MAPS: dict[str, dict[str, str]] = {
 NODES: dict[str, Callable] = {
     "ingest": ingest,
     "extract_text": extract_text,
+    "classify_document": classify_document,
     "chunk": chunk,
     "embed": embed,
     "extract_claims": extract_claims,
     "match_rules": match_rules,
+    "match_rules_against_sources": match_rules_against_sources,
+    "merge_findings": merge_findings,
     "score_confidence": score_confidence,
     "route_to_queue": route_to_queue,
     "human_review": human_review,
@@ -95,7 +115,7 @@ except ImportError:
 def build_graph(config: PipelineConfig | None = None):
     """Build the LangGraph StateGraph with all nodes and conditional edges.
 
-    Registers all 10 pipeline nodes, wires conditional edges using the
+    Registers all 13 pipeline nodes, wires conditional edges using the
     routing functions from routing.py, sets entry point at 'ingest', and
     terminates at END after 'finalize' completes successfully.
 

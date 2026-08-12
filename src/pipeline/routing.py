@@ -27,6 +27,7 @@ def make_routing_fn(
 
     Special per-node logic:
     - ingest: no retry support; any error → escalate
+    - classify_document: on completed + unclassified → escalate; otherwise next; retries on transient error
     - chunk: no retry support; completed/skipped → next; errors → escalate
     - route_to_queue: on completed, checks escalate bucket to decide next
     - human_review: always returns "finalize" on completed
@@ -44,6 +45,8 @@ def make_routing_fn(
     # Dispatch to node-specific routing logic
     if node_name == "ingest":
         return _make_ingest_route()
+    elif node_name == "classify_document":
+        return _make_classify_document_route(max_retries)
     elif node_name == "route_to_queue":
         return _make_route_to_queue_route(max_retries)
     elif node_name == "human_review":
@@ -100,6 +103,45 @@ def _make_ingest_route() -> Callable[[PipelineState], str]:
             return "next"
         elif status == "error":
             return "escalate"
+        else:
+            # Unhandled state — treat as permanent error (Req 1.7)
+            return "escalate"
+
+    return route
+
+
+def _make_classify_document_route(
+    max_retries: int,
+) -> Callable[[PipelineState], str]:
+    """Classify document routing: next, escalate, or retry.
+
+    On completed:
+    - If classification_label == "unclassified" → "escalate" (route to approval queue)
+    - Otherwise → "next" (proceed to chunk)
+
+    On error:
+    - Transient error below max → "retry"
+    - Transient error at/above max → "escalate"
+    - Permanent error → "escalate"
+
+    Requirements: 1.1, 1.2
+    """
+
+    def route(state: PipelineState) -> str:
+        status = state["node_status"]
+
+        if status == "completed":
+            classification_label = state.get("classification_label")  # type: ignore[call-overload]
+            if classification_label == "unclassified":
+                return "escalate"
+            return "next"
+        elif status == "error":
+            error_type = state.get("error_type")
+            retries = state["retries"].get("classify_document", 0)
+            if error_type == "transient" and retries < max_retries:
+                return "retry"
+            else:
+                return "escalate"
         else:
             # Unhandled state — treat as permanent error (Req 1.7)
             return "escalate"
