@@ -282,6 +282,7 @@ def get_deliverable() -> DeliverableResult:
                     "extracted_text": c.extracted_text,
                     "confidence": c.confidence,
                     "source_document_id": c.source_document_id,
+                    "citation_status": c.citation_status,
                 }
                 for c in section.claims
             ],

@@ -7,6 +7,7 @@ back to the original text substring.
 import re
 import uuid
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -34,7 +35,7 @@ class SourceLinker:
     ) -> SourceLocation:
         """Create a SourceLocation record from an ExtractedFact's span.
 
-        Validates: start_offset < end_offset.
+        Validates: source_span is not None, and start_offset < end_offset.
 
         Args:
             fact: The extracted fact containing source span information.
@@ -44,8 +45,14 @@ class SourceLinker:
             A SourceLocation model instance (not yet persisted).
 
         Raises:
-            ValueError: If start_offset >= end_offset.
+            ValueError: If source_span is None or start_offset >= end_offset.
         """
+        if fact.source_span is None:
+            raise ValueError(
+                f"Cannot attach source pointer: source_span is None "
+                f"(citation unverifiable for field '{fact.field_name}')"
+            )
+
         start = fact.source_span.start_offset
         end = fact.source_span.end_offset
 
@@ -121,13 +128,16 @@ def persist_fact(
     run_id: str,
     document_type: str,
     session: Session,
-) -> tuple[Claim, SourceLocation]:
-    """Persist an ExtractedFact as a Claim + SourceLocation pair.
+) -> tuple[Claim, Optional[SourceLocation]]:
+    """Persist an ExtractedFact as a Claim + optional SourceLocation pair.
 
     Maps ExtractedFact → Claim record using compound claim_type format.
     For repayment statements with row indexing (fact_group_id like "row_N"),
     the claim_type becomes `repayment_statement.row_N.field_name`.
     For other document types, claim_type is `{document_type}.{field_name}`.
+
+    If source_span is None (unverifiable citation), the Claim is persisted
+    but no SourceLocation is created.
 
     Args:
         fact: The extracted fact to persist.
@@ -137,7 +147,7 @@ def persist_fact(
         session: SQLAlchemy session for persistence.
 
     Returns:
-        Tuple of (Claim, SourceLocation) that were added to the session.
+        Tuple of (Claim, SourceLocation or None) that were added to the session.
     """
     # Build claim_type with repayment row indexing support
     if fact.fact_group_id and _ROW_PATTERN.match(fact.fact_group_id):
@@ -156,6 +166,10 @@ def persist_fact(
     )
     session.add(claim)
     session.flush()  # get claim.id
+
+    # Only create SourceLocation if source_span is verifiable
+    if fact.source_span is None:
+        return claim, None
 
     source_location = SourceLocation(
         claim_id=claim.id,

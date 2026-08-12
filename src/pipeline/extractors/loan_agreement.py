@@ -143,7 +143,7 @@ class LoanAgreementExtractor:
                 field_name=field_name,
                 value="not_found",
                 confidence=0.0,
-                source_span=SourceSpan(start_offset=0, end_offset=0),
+                source_span=None,
             )
 
         # If multiple matches (conflict), take the last one with confidence <= 0.5

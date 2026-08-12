@@ -69,13 +69,24 @@ def _convert_fact_to_extraction_result(
     Returns:
         An ExtractionResult entry compatible with the pipeline state.
     """
+    if fact.source_span is not None:
+        start_offset = fact.source_span.start_offset
+        end_offset = fact.source_span.end_offset
+        citation_status = "grounded"
+    else:
+        # Unverifiable citation
+        start_offset = 0
+        end_offset = 0
+        citation_status = "unverifiable"
+
     return ExtractionResult(
         claim_id=f"{document_type}.{fact.field_name}_{idx}",
         claim_text=f"{fact.field_name}: {fact.value}",
         chunk_index=0,
-        start_offset=fact.source_span.start_offset,
-        end_offset=fact.source_span.end_offset,
+        start_offset=start_offset,
+        end_offset=end_offset,
         confidence=fact.confidence,
+        citation_status=citation_status,
     )
 
 
@@ -148,18 +159,19 @@ async def _dispatch_type_specific_with_fallback(
 
     results: list[ExtractionResult] = []
     for idx, fact in enumerate(facts):
-        try:
-            source_linker.attach(fact, document_version_id)
-        except ValueError:
-            logger.warning(
-                "Skipping source pointer attachment for fact %s.%s_%d: "
-                "invalid span (%d:%d)",
-                document_type,
-                fact.field_name,
-                idx,
-                fact.source_span.start_offset,
-                fact.source_span.end_offset,
-            )
+        if fact.source_span is not None:
+            try:
+                source_linker.attach(fact, document_version_id)
+            except ValueError:
+                logger.warning(
+                    "Skipping source pointer attachment for fact %s.%s_%d: "
+                    "invalid span (%d:%d)",
+                    document_type,
+                    fact.field_name,
+                    idx,
+                    fact.source_span.start_offset,
+                    fact.source_span.end_offset,
+                )
 
         results.append(_convert_fact_to_extraction_result(fact, document_type, idx))
 
@@ -193,18 +205,19 @@ async def _dispatch_llm_only(
 
     results: list[ExtractionResult] = []
     for idx, fact in enumerate(facts):
-        try:
-            source_linker.attach(fact, document_version_id)
-        except ValueError:
-            logger.warning(
-                "Skipping source pointer attachment for fact %s.%s_%d: "
-                "invalid span (%d:%d)",
-                document_type,
-                fact.field_name,
-                idx,
-                fact.source_span.start_offset,
-                fact.source_span.end_offset,
-            )
+        if fact.source_span is not None:
+            try:
+                source_linker.attach(fact, document_version_id)
+            except ValueError:
+                logger.warning(
+                    "Skipping source pointer attachment for fact %s.%s_%d: "
+                    "invalid span (%d:%d)",
+                    document_type,
+                    fact.field_name,
+                    idx,
+                    fact.source_span.start_offset,
+                    fact.source_span.end_offset,
+                )
 
         results.append(_convert_fact_to_extraction_result(fact, document_type, idx))
 

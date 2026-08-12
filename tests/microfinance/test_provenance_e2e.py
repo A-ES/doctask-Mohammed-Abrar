@@ -67,6 +67,10 @@ class TestProvenanceEndToEnd:
             # Process each fact with a valid span
             valid_facts_count = 0
             for fact in facts:
+                # Skip facts with unverifiable citations (None source_span)
+                if fact.source_span is None:
+                    continue
+
                 start = fact.source_span.start_offset
                 end = fact.source_span.end_offset
 

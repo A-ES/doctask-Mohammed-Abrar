@@ -32,6 +32,8 @@ class SectionClaim:
         extracted_text: The extracted value.
         confidence: Confidence score 0.0–1.0.
         source_document_id: Which document this claim came from.
+        citation_status: "grounded" if backed by a verified source span,
+            "unverifiable" if no source span could be resolved.
     """
 
     claim_id: str
@@ -39,6 +41,7 @@ class SectionClaim:
     extracted_text: str
     confidence: float
     source_document_id: str
+    citation_status: str = "grounded"  # "grounded" | "unverifiable"
 
 
 @dataclass
@@ -86,6 +89,7 @@ class Section:
                 "extracted_text": c.extracted_text,
                 "confidence": c.confidence,
                 "source_document_id": c.source_document_id,
+                "citation_status": c.citation_status,
             }
             for c in sorted_claims
         ]

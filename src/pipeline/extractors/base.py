@@ -23,13 +23,17 @@ class ExtractedFact:
     """A single extracted fact with source provenance.
 
     Represents a field-value pair extracted from a document, along with
-    a confidence score and a pointer back to the source text span.
+    a confidence score and an optional pointer back to the source text span.
+
+    When source_span is None, the citation is unverifiable — the fact was
+    extracted but cannot be traced to a specific location in the source.
+    Consumers MUST handle the None case explicitly.
     """
 
     field_name: str
     value: str  # normalized string representation
     confidence: float  # 0.000–1.000
-    source_span: SourceSpan
+    source_span: Optional[SourceSpan]  # None = citation unverifiable
     fact_group_id: Optional[str] = None  # groups multi-field records
 
 

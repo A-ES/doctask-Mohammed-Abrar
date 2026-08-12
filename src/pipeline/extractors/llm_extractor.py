@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 from src.pipeline.extractors.base import ExtractedFact, SourceSpan
 
@@ -98,23 +98,23 @@ FIELD_SCHEMAS: dict[str, list[dict[str, str]]] = {
 # ---------------------------------------------------------------------------
 
 
-def locate_span(quoted_span: str, source_text: str) -> SourceSpan:
+def locate_span(quoted_span: str, source_text: str) -> Optional[SourceSpan]:
     """Locate a quoted span in the source text to compute character offsets.
 
     Strategy:
     1. Exact string match (fastest, most reliable).
     2. Normalized match (collapse whitespace, case-insensitive).
-    3. If both fail, return a zero-span flagged as unverifiable.
+    3. If both fail, return None (citation unverifiable).
 
     Args:
         quoted_span: The verbatim text the LLM claims to have found.
         source_text: The full source document text.
 
     Returns:
-        SourceSpan with computed offsets, or (0, 0) if unverifiable.
+        SourceSpan with computed offsets, or None if unverifiable.
     """
     if not quoted_span or not source_text:
-        return SourceSpan(start_offset=0, end_offset=0)
+        return None
 
     # Strategy 1: exact match
     idx = source_text.find(quoted_span)
@@ -125,7 +125,7 @@ def locate_span(quoted_span: str, source_text: str) -> SourceSpan:
     normalized_quote = _normalize_for_matching(quoted_span)
     if len(normalized_quote) < 3:
         # Too short for reliable fuzzy matching
-        return SourceSpan(start_offset=0, end_offset=0)
+        return None
 
     # Sliding window search over normalized source
     normalized_source = _normalize_for_matching(source_text)
@@ -139,8 +139,8 @@ def locate_span(quoted_span: str, source_text: str) -> SourceSpan:
         if original_start < original_end:
             return SourceSpan(start_offset=original_start, end_offset=original_end)
 
-    # Strategy 3: unverifiable — return zero-span
-    return SourceSpan(start_offset=0, end_offset=0)
+    # Strategy 3: unverifiable
+    return None
 
 
 def _normalize_for_matching(text: str) -> str:
@@ -249,7 +249,7 @@ class LLMFactExtractor:
                     field_name=f,
                     value="not_found",
                     confidence=0.0,
-                    source_span=SourceSpan(start_offset=0, end_offset=0),
+                    source_span=None,
                 )
                 for f in field_names
             ]
@@ -326,8 +326,8 @@ class LLMFactExtractor:
             # Locate the quoted span in source text
             span = locate_span(quoted_span, source_text)
 
-            # If span is unverifiable (0, 0) but we have a value, reduce confidence
-            if span.start_offset == 0 and span.end_offset == 0 and value != "not_found":
+            # If span is None (unverifiable) but we have a value, reduce confidence
+            if span is None and value != "not_found":
                 # Citation unverifiable — flag with reduced confidence
                 confidence = min(confidence, 0.5)
                 logger.info(
@@ -350,7 +350,7 @@ class LLMFactExtractor:
                     field_name=fname,
                     value="not_found",
                     confidence=0.0,
-                    source_span=SourceSpan(start_offset=0, end_offset=0),
+                    source_span=None,
                 ))
 
         return facts
@@ -369,7 +369,7 @@ class LLMFactExtractor:
                 field_name=f["field_name"],
                 value="not_found",
                 confidence=0.0,
-                source_span=SourceSpan(start_offset=0, end_offset=0),
+                source_span=None,
             )
             for f in field_schema
         ]

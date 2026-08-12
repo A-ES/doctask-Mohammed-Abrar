@@ -31,6 +31,7 @@ class ExtractionResult(TypedDict):
     start_offset: int
     end_offset: int
     confidence: float  # 0.0–1.0
+    citation_status: str  # "grounded" | "unverifiable"
 
 
 class ComplianceVerdict(TypedDict):

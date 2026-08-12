@@ -687,14 +687,13 @@ class TestFieldLevelFallback:
     @pytest.mark.anyio
     async def test_citation_unverifiable_when_span_not_found(self):
         """If the LLM returns a quoted span that doesn't exist in the source,
-        the citation is flagged as unverifiable (0,0 span) but the claim
-        is still included with reduced confidence."""
+        the citation is None (unverifiable) and the claim is still included
+        with reduced confidence."""
         source = "The interest rate is eighteen point five percent per annum."
         quoted = "this text does not exist anywhere in the document"
 
         span = locate_span(quoted, source)
-        assert span.start_offset == 0
-        assert span.end_offset == 0
+        assert span is None
 
     @pytest.mark.anyio
     async def test_citation_normalized_match(self):
@@ -704,7 +703,7 @@ class TestFieldLevelFallback:
 
         span = locate_span(quoted, source)
         # Should find via normalized matching
-        assert span.start_offset > 0 or span.end_offset > 0
+        assert span is not None
         # The span should cover the relevant text
         matched_text = source[span.start_offset:span.end_offset]
         assert "Priya" in matched_text

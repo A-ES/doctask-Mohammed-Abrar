@@ -90,6 +90,19 @@ async def match_rules(
     verdicts: list[ComplianceVerdict] = []
     try:
         for claim in claims:
+            # Claims with unverifiable citations get a distinct outcome.
+            # Read citation_status directly — NEVER infer from offset values.
+            if claim.get("citation_status") == "unverifiable":
+                verdicts.append(ComplianceVerdict(
+                    claim_id=claim["claim_id"],
+                    verdict="indeterminate",
+                    confidence=0.0,
+                    needs_human_review=True,
+                    rule_id=None,
+                    evidence_refs=["citation_unverifiable"],
+                ))
+                continue
+
             verdict = await rule_matching_service.match(claim)
             verdicts.append(verdict)
     except RuleConfigError as exc:

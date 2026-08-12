@@ -290,13 +290,12 @@ class TestSourceSpan:
         assert "John Doe" in matched
 
     @pytest.mark.anyio
-    async def test_not_found_source_span_is_zero(
+    async def test_not_found_source_span_is_none(
         self, extractor: LoanAgreementExtractor
     ):
         facts = await extractor.extract("nothing relevant here", [])
         for fact in facts:
-            assert fact.source_span.start_offset == 0
-            assert fact.source_span.end_offset == 0
+            assert fact.source_span is None
 
 
 class TestProtocolCompliance:
@@ -310,7 +309,8 @@ class TestProtocolCompliance:
         assert isinstance(facts, list)
         for fact in facts:
             assert isinstance(fact, ExtractedFact)
-            assert isinstance(fact.source_span, SourceSpan)
+            # source_span is Optional[SourceSpan] — None for unverifiable citations
+            assert fact.source_span is None or isinstance(fact.source_span, SourceSpan)
 
     @pytest.mark.anyio
     async def test_confidence_in_valid_range(
