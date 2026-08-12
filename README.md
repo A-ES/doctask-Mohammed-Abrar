@@ -46,9 +46,11 @@ Document intelligence pipeline for synthetic microfinance and consumer loan comp
 │   │   ├── stores.py        # ThreadSafeCheckpointStore (concurrent execution)
 │   │   ├── approval.py      # Approval gate service + in-memory store
 │   │   ├── approval_api.py  # REST endpoints for programmatic approve/reject
+│   │   ├── services.py      # Shared service layer (called by both REST + MCP)
 │   │   ├── graph.py         # StateGraph assembly (13 nodes + fan-out)
 │   │   ├── api.py           # FastAPI endpoints (POST /runs, /runs/{id}/resume)
 │   │   └── polling.py       # Human review polling service
+│   ├── mcp_server.py        # MCP server (6 tools, stdio transport)
 │   └── main.py              # FastAPI entrypoint
 ├── tests/
 │   ├── test_schema/         # Schema property tests (14 properties)
@@ -57,7 +59,8 @@ Document intelligence pipeline for synthetic microfinance and consumer loan comp
 │   ├── synthetic/           # Synthetic document generator + tests
 │   ├── test_resumability.py # Kill-and-resume invariant tests
 │   ├── test_concurrency.py  # Concurrent run isolation tests
-│   └── test_approval_gate.py # Approval gate endpoint + independence tests
+│   ├── test_approval_gate.py # Approval gate endpoint + independence tests
+│   └── test_mcp_integration.py # Full pile end-to-end via MCP tools only
 ├── docker-compose.yml       # PostgreSQL 16 + pgvector
 └── pyproject.toml
 ```
@@ -76,8 +79,32 @@ Document intelligence pipeline for synthetic microfinance and consumer loan comp
 - [x] **Concurrent run isolation** (per-run_id locking, thread-safe store, tested)
 - [x] **Approval gate** (programmatic REST approve/reject, queue independence, tested)
 - [x] **Rules checking stage** (YAML playbooks, LLM + structured evaluators, 58 tests, 9 PBT properties)
+- [x] **MCP server** (6 tools mirroring REST, shared service layer, full integration test)
 - [ ] LangGraph runtime integration (requires `langgraph` package)
-- [ ] MCP + React UI + cost tracking
+- [ ] React UI + cost tracking
+
+## MCP Server
+
+The system is also exposed as an MCP (Model Context Protocol) server. Both the REST API and MCP tools call the same shared service functions — no separate logic paths.
+
+### Tools
+
+| Tool | Equivalent REST | Purpose |
+|------|----------------|---------|
+| `start_run` | `POST /runs` | Start a new pipeline run (upload a pile) |
+| `get_run_status` | `POST /runs/{id}/resume` | Query run status and next node |
+| `list_pending_approvals` | `GET /approval/runs/{id}/queue` | List approval queue items |
+| `decide_approval` | `POST /approval/items/{id}/decide` | Approve or reject an item |
+| `get_deliverable` | — | Get current deliverable with section hashes |
+| `get_change_history` | `GET /runs/{id}/history` | Get audit trail for a run |
+
+### Running the MCP server
+
+```bash
+python -m src.mcp_server
+```
+
+The server uses stdio transport and can be configured in any MCP-compatible client.
 
 ## Running
 
@@ -93,4 +120,7 @@ python -m pytest tests/ -v
 
 # Run pipeline tests only
 python -m pytest tests/pipeline/ -v
+
+# Run MCP integration test
+python -m pytest tests/test_mcp_integration.py -v
 ```

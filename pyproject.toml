@@ -9,11 +9,13 @@ dependencies = [
     "psycopg2-binary",
     "pgvector",
     "sqlalchemy",
+    "mcp",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-asyncio",
     "hypothesis",
     "httpx",
     "anyio[trio]",

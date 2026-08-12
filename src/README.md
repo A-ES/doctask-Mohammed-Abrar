@@ -31,6 +31,7 @@ LangGraph pipeline implementation — 3 stages, 13 nodes, conditional routing.
 | `stores.py` | `ThreadSafeCheckpointStore` — thread-safe in-memory store for concurrent execution |
 | `approval.py` | `ApprovalService` + `InMemoryApprovalStore` — queue management, per-item atomic decisions |
 | `approval_api.py` | FastAPI router: `POST /approval/items/{id}/decide`, queue listing |
+| `services.py` | Shared service functions called by both REST and MCP (no separate logic paths) |
 | `graph.py` | `build_graph()` — StateGraph assembly with all nodes and edges |
 | `api.py` | FastAPI router: `POST /runs`, `POST /runs/{id}/resume` |
 | `polling.py` | `PollingService` — checks decisions, triggers resume, sends reminders |
@@ -105,3 +106,36 @@ Programmatic approve/reject for queued items (findings, conflicts, proposed upda
 ### Invariant 5
 
 Approving or rejecting one item has zero effect on other items in the same batch. Decisions are atomic per-item.
+
+## MCP Server (`src/mcp_server.py`)
+
+Exposes the same operations as the REST API via the Model Context Protocol (stdio transport). Both surfaces call the shared service functions in `services.py` — no separate logic paths.
+
+### Tools
+
+| Tool | Parameters | Returns |
+|------|-----------|---------|
+| `start_run` | `document_id`, `document_version_id`, `config_overrides?` | `run_id`, `status` |
+| `get_run_status` | `run_id` | `status`, `resumed_from`, `next_node` |
+| `list_pending_approvals` | `run_id` | `items[]`, `total`, `pending` |
+| `decide_approval` | `item_id`, `decision`, `reviewer_id`, `justification` | `success`, `decision` |
+| `get_deliverable` | — | `sections{}`, `deliverable_hash` |
+| `get_change_history` | `run_id` | `entries[]`, `total` |
+
+### Shared Service Layer (`src/pipeline/services.py`)
+
+The `ServiceRegistry` singleton holds all store/service references. Both FastAPI endpoints and MCP tools inject their dependencies here, then call the same functions:
+
+- `create_run()` → validates config, generates UUID, persists run row
+- `get_run_status()` → queries last checkpoint, determines next node
+- `list_pending_approvals()` → returns all queue items with status counts
+- `decide_approval_item()` → atomic per-item approve/reject
+- `get_deliverable()` → computes section hashes, returns assembled output
+- `get_change_history()` → reads audit_events, returns chronological entries
+
+### Running
+
+```bash
+# Stdio transport (for MCP clients)
+python -m src.mcp_server
+```

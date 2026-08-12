@@ -52,7 +52,7 @@ Pure Python, no database required. Includes unit tests and 25 property-based tes
 | `test_properties_findings.py` | P22: Finding structural completeness | Finding integrity |
 | `test_properties_nodes_rules.py` | P23: Merge preserves all, P24: Empty → empty, P25: Fail-only findings | Rules node correctness |
 
-## Infrastructure Invariant Tests (`tests/test_*.py`) — 31 tests
+## Infrastructure Invariant Tests (`tests/test_*.py`) — 36 tests
 
 Pure Python, no database required. Validates system-level invariants from `docs/invariants.md`.
 
@@ -61,6 +61,7 @@ Pure Python, no database required. Validates system-level invariants from `docs/
 | `test_resumability.py` | 5 | Checkpointed resume: no side-effect replay, state equivalence, orphan cleanup |
 | `test_concurrency.py` | 5 | Run isolation: per-run_id scoping, no interleaved writes, same-run serialization |
 | `test_approval_gate.py` | 16 | Approval independence: approve/reject one item has zero effect on others (8 service + 8 REST) |
+| `test_mcp_integration.py` | 5 | Full pile end-to-end via MCP tools only: start → approve → deliverable → history |
 | `test_main.py` | 2 | Health endpoint baseline |
 
 ## Running
@@ -74,6 +75,9 @@ python -m pytest tests/pipeline/ -v
 
 # Infrastructure invariant tests only
 python -m pytest tests/test_resumability.py tests/test_concurrency.py tests/test_approval_gate.py -v
+
+# MCP integration test only
+python -m pytest tests/test_mcp_integration.py -v
 
 # Schema tests only (needs PostgreSQL)
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/docdb_test python -m pytest tests/test_schema/ -v
