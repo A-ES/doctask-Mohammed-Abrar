@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
-import { render, within, cleanup } from "@testing-library/react";
-import { userEvent } from "@testing-library/user-event";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { DecisionControls } from "./DecisionControls";
 import type {
   QueueItem,
@@ -17,12 +16,6 @@ const itemTypeArb: fc.Arbitrary<ItemType> = fc.constantFrom(
   "finding",
   "conflict",
   "proposed_update"
-);
-
-const itemStatusArb: fc.Arbitrary<ItemStatus> = fc.constantFrom(
-  "pending",
-  "approved",
-  "rejected"
 );
 
 const nonPendingStatusArb: fc.Arbitrary<ItemStatus> = fc.constantFrom(
@@ -62,7 +55,9 @@ const queueItemPayloadArb: fc.Arbitrary<QueueItemPayload> = fc.record({
   }),
 });
 
-const queueItemArb = (status: fc.Arbitrary<ItemStatus>): fc.Arbitrary<QueueItem> =>
+const queueItemArb = (
+  status: fc.Arbitrary<ItemStatus>
+): fc.Arbitrary<QueueItem> =>
   fc.record({
     id: fc.uuid(),
     run_id: fc.uuid(),
@@ -116,27 +111,30 @@ describe("DecisionControls Property Tests", () => {
   describe("Property 5: Decision Button Visibility", () => {
     it("Approve and Reject buttons are rendered when status is pending", () => {
       fc.assert(
-        fc.property(queueItemArb(fc.constant("pending" as ItemStatus)), (item) => {
-          const { unmount } = render(
-            <DecisionControls
-              item={item}
-              onDecide={() => {}}
-              isSubmitting={false}
-            />
-          );
+        fc.property(
+          queueItemArb(fc.constant("pending" as ItemStatus)),
+          (item) => {
+            const { unmount } = render(
+              <DecisionControls
+                item={item}
+                onDecide={() => {}}
+                isSubmitting={false}
+              />
+            );
 
-          const approveButton = screen.queryByRole("button", {
-            name: /approve/i,
-          });
-          const rejectButton = screen.queryByRole("button", {
-            name: /reject/i,
-          });
+            const approveButton = screen.queryByRole("button", {
+              name: /approve/i,
+            });
+            const rejectButton = screen.queryByRole("button", {
+              name: /reject/i,
+            });
 
-          expect(approveButton).toBeInTheDocument();
-          expect(rejectButton).toBeInTheDocument();
+            expect(approveButton).toBeInTheDocument();
+            expect(rejectButton).toBeInTheDocument();
 
-          unmount();
-        }),
+            unmount();
+          }
+        ),
         { numRuns: 100 }
       );
     });
@@ -179,14 +177,12 @@ describe("DecisionControls Property Tests", () => {
    * **Validates: Requirements 3.3**
    */
   describe("Property 6: Justification Required", () => {
-    it("buttons are disabled when justification is empty or whitespace-only", async () => {
-      await fc.assert(
-        fc.asyncProperty(
+    it("buttons are disabled when justification is empty or whitespace-only", () => {
+      fc.assert(
+        fc.property(
           queueItemArb(fc.constant("pending" as ItemStatus)),
           emptyOrWhitespaceArb,
-          async (item, whitespaceText) => {
-            const user = userEvent.setup();
-
+          (item, whitespaceText) => {
             const { unmount } = render(
               <DecisionControls
                 item={item}
@@ -195,12 +191,9 @@ describe("DecisionControls Property Tests", () => {
               />
             );
 
-            // Type the whitespace/empty text into the justification textarea
+            // Use fireEvent.change to set the justification textarea value
             const textarea = screen.getByLabelText(/decision justification/i);
-            if (whitespaceText.length > 0) {
-              await user.clear(textarea);
-              await user.type(textarea, whitespaceText);
-            }
+            fireEvent.change(textarea, { target: { value: whitespaceText } });
 
             const approveButton = screen.getByRole("button", {
               name: /approve/i,
@@ -219,14 +212,12 @@ describe("DecisionControls Property Tests", () => {
       );
     });
 
-    it("buttons are enabled when justification has non-whitespace content", async () => {
-      await fc.assert(
-        fc.asyncProperty(
+    it("buttons are enabled when justification has non-whitespace content", () => {
+      fc.assert(
+        fc.property(
           queueItemArb(fc.constant("pending" as ItemStatus)),
           nonEmptyNonWhitespaceArb,
-          async (item, justificationText) => {
-            const user = userEvent.setup();
-
+          (item, justificationText) => {
             const { unmount } = render(
               <DecisionControls
                 item={item}
@@ -235,10 +226,11 @@ describe("DecisionControls Property Tests", () => {
               />
             );
 
-            // Type meaningful justification text
+            // Use fireEvent.change to set meaningful justification text
             const textarea = screen.getByLabelText(/decision justification/i);
-            await user.clear(textarea);
-            await user.type(textarea, justificationText);
+            fireEvent.change(textarea, {
+              target: { value: justificationText },
+            });
 
             const approveButton = screen.getByRole("button", {
               name: /approve/i,

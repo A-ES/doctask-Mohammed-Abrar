@@ -60,19 +60,6 @@ const queueItemArb: fc.Arbitrary<QueueItem> = fc.record({
   justification: fc.option(fc.string({ minLength: 1, maxLength: 200 }), { nil: null }),
 });
 
-/** Generate an array of QueueItems that all share the same run_id */
-function queueItemsForRun(runId: string): fc.Arbitrary<QueueItem[]> {
-  return fc
-    .array(queueItemArb, { minLength: 1, maxLength: 20 })
-    .map((items) =>
-      items.map((item, idx) => ({
-        ...item,
-        id: `${item.id}-${idx}`, // ensure unique ids
-        run_id: runId,
-      }))
-    );
-}
-
 // --- Test Setup ---
 
 describe("QueueStore Property Tests", () => {

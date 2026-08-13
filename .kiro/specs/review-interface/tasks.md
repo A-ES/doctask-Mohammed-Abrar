@@ -84,7 +84,7 @@ Build the compliance review interface as a React + TypeScript SPA view integrate
     - **Property 1: Citation Chip Rendering Correctness** — label matches source_location/source_span presence
     - **Validates: Requirements 1.3, 1.4**
 
-- [~] 5. Checkpoint - Ensure all tests pass
+- [x] 5. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 6. Implement core UI components (atoms)
@@ -116,7 +116,7 @@ Build the compliance review interface as a React + TypeScript SPA view integrate
     - Apply ARIA `role="alert"` for screen reader announcement
     - _Requirements: 11.3, 9.3_
 
-- [ ] 7. Implement composite UI components
+- [x] 7. Implement composite UI components
   - [x] 7.1 Implement RunSelector component
     - Create `frontend/src/components/review/RunSelector.tsx` using Radix UI Select primitive
     - Display available runs with status indicators, trigger `onSelectRun` callback
@@ -135,7 +135,7 @@ Build the compliance review interface as a React + TypeScript SPA view integrate
     - Wire `onDecide` callback; show loading state while submitting
     - _Requirements: 3.2, 3.3, 3.6, 9.2_
 
-  - [-] 7.4 Write property tests for DecisionControls
+  - [x] 7.4 Write property tests for DecisionControls
     - **Property 5: Decision Button Visibility** — buttons visible iff status is pending
     - **Property 6: Justification Required** — submission blocked when justification empty
     - **Validates: Requirements 3.2, 3.3, 3.6**
@@ -153,94 +153,94 @@ Build the compliance review interface as a React + TypeScript SPA view integrate
     - Apply `role="listbox"` with `aria-label="Approval queue items"`
     - _Requirements: 1.1, 1.5, 2.4, 9.3_
 
-  - [-] 7.7 Write property test for QueueList rendering
+  - [x] 7.7 Write property test for QueueList rendering
     - **Property 2: Queue Item Display Completeness** — rendered list contains exactly N cards matching response data
     - **Property 15: Cross-Run Item Isolation** — all displayed items have run_id matching selected run
     - **Validates: Requirements 1.1, 1.2, 1.5, 7.4**
 
-- [ ] 8. Implement hooks
-  - [-] 8.1 Implement usePolling hook
+- [x] 8. Implement hooks
+  - [x] 8.1 Implement usePolling hook
     - Create `frontend/src/hooks/usePolling.ts` implementing visibility-aware polling per design spec
     - Fetch queue and progress at configurable interval; pause on `document.hidden`; resume with immediate fetch on visibility return
     - On network error: set `connectionLost`, preserve local state, retry next interval
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 11.3_
 
-  - [~] 8.2 Write property test for polling behavior
+  - [x] 8.2 Write property test for polling behavior
     - **Property 13: Network Error Preserves Local State** — local queue state unchanged on network error, connectionLost indicator displayed
     - **Validates: Requirements 11.3**
 
-  - [-] 8.3 Implement useKeyboardNavigation hook
+  - [x] 8.3 Implement useKeyboardNavigation hook
     - Create `frontend/src/hooks/useKeyboardNavigation.ts` handling arrow keys for queue traversal, Enter for selection, `a`/`r` shortcuts for Approve/Reject focus, Escape to return to list
     - _Requirements: 9.1, 9.2_
 
-  - [ ] 8.4 Implement useFocusManagement hook
+  - [x] 8.4 Implement useFocusManagement hook
     - Create `frontend/src/hooks/useFocusManagement.ts` managing focus advancement after decision submission (move to next pending item)
     - Implement visible focus ring styling via Tailwind `ring-2 ring-offset-2` meeting WCAG 2.1 AA
     - _Requirements: 9.4, 9.5_
 
-  - [~] 8.5 Write property test for focus advancement
+  - [x] 8.5 Write property test for focus advancement
     - **Property 14: Focus Advances After Decision** — focus moves to next pending item after successful decision
     - **Validates: Requirements 9.4**
 
-- [~] 9. Checkpoint - Ensure all tests pass
+- [x] 9. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 10. Assemble page layout and routing
-  - [~] 10.1 Implement MasterDetail layout component
+- [x] 10. Assemble page layout and routing
+  - [x] 10.1 Implement MasterDetail layout component
     - Create `frontend/src/components/review/MasterDetail.tsx` with responsive split: 40%/60% on desktop (`md:` breakpoint), stacked with navigation state on mobile
     - Implement mobile navigation state (`"list" | "detail"`) with back button
     - _Requirements: 10.2, 10.3_
 
-  - [~] 10.2 Implement TopBar component
+  - [x] 10.2 Implement TopBar component
     - Create `frontend/src/components/review/TopBar.tsx` composing RunSelector and StatusBadge in a horizontal bar
     - _Requirements: 7.1, 7.3_
 
-  - [~] 10.3 Implement ReviewPage and wire into React Router
+  - [x] 10.3 Implement ReviewPage and wire into React Router
     - Create `frontend/src/pages/ReviewPage.tsx` composing TopBar, ProgressStepper, MasterDetail (QueueList + DetailPanel)
     - Connect all stores, hooks (usePolling, useKeyboardNavigation, useFocusManagement), and services
     - Register `/review` route in the app shell's router configuration
     - _Requirements: 10.5, 7.2, 8.1_
 
-  - [~] 10.4 Write unit tests for ReviewPage integration
+  - [x] 10.4 Write unit tests for ReviewPage integration
     - Test that ReviewPage renders all sub-components correctly
     - Test that run switching triggers queue reset and refetch
     - Test responsive layout breakpoint behavior
     - _Requirements: 10.2, 10.3, 7.2_
 
-- [ ] 11. Implement resume and error recovery flows
-  - [~] 11.1 Implement run resume functionality
+- [x] 11. Implement resume and error recovery flows
+  - [x] 11.1 Implement run resume functionality
     - Add resume button/action in TopBar that calls `POST /runs/{run_id}/resume`
     - On success: update ProgressStepper and StatusBadge from response
     - On failure: show error toast, preserve current state
     - _Requirements: 11.2_
 
-  - [~] 11.2 Implement 409 conflict handling
+  - [x] 11.2 Implement 409 conflict handling
     - In decision service: detect 409 response, fetch fresh item state from `GET /approval/items/{item_id}`, update store, show "already decided" notification
     - _Requirements: 5.3_
 
-- [~] 12. Checkpoint - Ensure all tests pass
+- [x] 12. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 13. Integration tests with Playwright
-  - [~] 13.1 Set up Playwright test infrastructure
+- [x] 13. Integration tests with Playwright
+  - [x] 13.1 Set up Playwright test infrastructure
     - Create `frontend/e2e/` directory with Playwright config
     - Create mock server utility for simulating backend API responses (queue, items, decisions, runs, progress)
     - Configure test fixtures with sample queue data (mix of pending/approved/rejected items with grounded and unverifiable citations)
     - _Requirements: 12.1, 12.2, 12.3_
 
-  - [~] 13.2 Write Playwright test for approve flow
+  - [x] 13.2 Write Playwright test for approve flow
     - Navigate to `/review`, select a run, select a pending item, enter justification, click Approve, verify item status updates to approved in both detail panel and queue list
     - **Validates: Requirements 12.1**
 
-  - [~] 13.3 Write Playwright test for reject flow with isolation verification
+  - [x] 13.3 Write Playwright test for reject flow with isolation verification
     - Navigate to `/review`, select a run, submit a reject decision, verify item status updates to rejected, verify all other queue items remain unchanged
     - **Validates: Requirements 12.2**
 
-  - [~] 13.4 Write Playwright test for kill/restart resume path
+  - [x] 13.4 Write Playwright test for kill/restart resume path
     - Simulate backend restart (stop mock server, restart), trigger resume action, verify previously submitted decisions remain intact, verify progress stepper reflects resumed state
     - **Validates: Requirements 12.3**
 
-- [~] 14. Final checkpoint - Ensure all tests pass
+- [x] 14. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

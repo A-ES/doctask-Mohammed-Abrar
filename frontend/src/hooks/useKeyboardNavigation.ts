@@ -32,7 +32,7 @@ export function useKeyboardNavigation({
 }: UseKeyboardNavigationProps): void {
   const isTyping = useCallback((event: KeyboardEvent): boolean => {
     const target = event.target as HTMLElement | null;
-    if (!target) return false;
+    if (!target || !target.tagName) return false;
     const tagName = target.tagName.toLowerCase();
     if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
       return true;

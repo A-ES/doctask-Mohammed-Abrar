@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { QueueList } from "./QueueList";
 import type {
   QueueItem,
@@ -81,17 +81,6 @@ function uniqueQueueItemsArb(
     .map((items) =>
       items.map((item, idx) => ({ ...item, id: `item-${idx}` }))
     );
-}
-
-/** Generate an array of QueueItems that all share the same run_id */
-function queueItemsForRunArb(
-  runId: string,
-  minLength: number,
-  maxLength: number
-): fc.Arbitrary<QueueItem[]> {
-  return uniqueQueueItemsArb(minLength, maxLength).map((items) =>
-    items.map((item) => ({ ...item, run_id: runId }))
-  );
 }
 
 // --- Tests ---
