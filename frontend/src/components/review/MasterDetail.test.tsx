@@ -36,9 +36,9 @@ describe("MasterDetail", () => {
     expect(listContainer.className).toContain("md:w-2/5");
     expect(listContainer.className).toContain("md:block");
 
-    // Detail panel container
-    const detailContainer = wrapper.children[1] as HTMLElement;
-    expect(detailContainer.className).toContain("md:w-3/5");
+    // Detail panel container (now uses md:flex-1 after the divider)
+    const detailContainer = wrapper.children[2] as HTMLElement;
+    expect(detailContainer.className).toContain("md:flex-1");
     expect(detailContainer.className).toContain("md:block");
   });
 
@@ -53,7 +53,8 @@ describe("MasterDetail", () => {
 
     const wrapper = container.firstElementChild as HTMLElement;
     const listContainer = wrapper.children[0] as HTMLElement;
-    const detailContainer = wrapper.children[1] as HTMLElement;
+    // Detail panel is now children[2] (after divider at children[1])
+    const detailContainer = wrapper.children[2] as HTMLElement;
 
     // List visible on mobile (block class applied)
     expect(listContainer.className).toContain("block");
@@ -74,7 +75,8 @@ describe("MasterDetail", () => {
 
     const wrapper = container.firstElementChild as HTMLElement;
     const listContainer = wrapper.children[0] as HTMLElement;
-    const detailContainer = wrapper.children[1] as HTMLElement;
+    // Detail panel is now children[2] (after divider at children[1])
+    const detailContainer = wrapper.children[2] as HTMLElement;
 
     // List hidden on mobile
     expect(listContainer.className).toContain("hidden");
@@ -160,7 +162,8 @@ describe("MasterDetail", () => {
     );
 
     const wrapper = container.firstElementChild as HTMLElement;
-    const detailContainer = wrapper.children[1] as HTMLElement;
+    // Detail panel is children[2] (after divider at children[1])
+    const detailContainer = wrapper.children[2] as HTMLElement;
     const backButtonContainer = detailContainer.children[0] as HTMLElement;
 
     expect(backButtonContainer.className).toContain("md:hidden");

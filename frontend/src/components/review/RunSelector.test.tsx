@@ -109,13 +109,13 @@ describe("RunSelector", () => {
     expect(runningDot).toBeInTheDocument();
     expect(runningDot!.className).toContain("bg-blue-400");
 
-    // Completed status -> green dot
+    // Completed status -> emerald dot
     const completedDot = options[1].querySelector("[aria-hidden='true']");
-    expect(completedDot!.className).toContain("bg-green-400");
+    expect(completedDot!.className).toContain("bg-emerald-400");
 
-    // Failed status -> red dot
+    // Failed status -> rose dot
     const failedDot = options[2].querySelector("[aria-hidden='true']");
-    expect(failedDot!.className).toContain("bg-red-400");
+    expect(failedDot!.className).toContain("bg-rose-400");
   });
 
   it("renders with an empty runs array", () => {

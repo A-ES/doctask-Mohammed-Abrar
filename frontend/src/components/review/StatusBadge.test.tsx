@@ -17,33 +17,33 @@ describe("StatusBadge", () => {
   it("applies blue color classes for running status", () => {
     render(<StatusBadge status="running" />);
     const badge = screen.getByRole("status");
-    expect(badge.className).toContain("bg-blue-500/20");
+    expect(badge.className).toContain("bg-blue-500/10");
     expect(badge.className).toContain("text-blue-300");
-    expect(badge.className).toContain("border-blue-500/40");
+    expect(badge.className).toContain("border-blue-500/20");
   });
 
   it("applies green color classes for completed status", () => {
     render(<StatusBadge status="completed" />);
     const badge = screen.getByRole("status");
-    expect(badge.className).toContain("bg-green-500/20");
-    expect(badge.className).toContain("text-green-300");
-    expect(badge.className).toContain("border-green-500/40");
+    expect(badge.className).toContain("bg-emerald-500/10");
+    expect(badge.className).toContain("text-emerald-300");
+    expect(badge.className).toContain("border-emerald-500/20");
   });
 
   it("applies red color classes for failed status", () => {
     render(<StatusBadge status="failed" />);
     const badge = screen.getByRole("status");
-    expect(badge.className).toContain("bg-red-500/20");
-    expect(badge.className).toContain("text-red-300");
-    expect(badge.className).toContain("border-red-500/40");
+    expect(badge.className).toContain("bg-rose-500/10");
+    expect(badge.className).toContain("text-rose-300");
+    expect(badge.className).toContain("border-rose-500/20");
   });
 
   it("applies amber color classes for paused status", () => {
     render(<StatusBadge status="paused" />);
     const badge = screen.getByRole("status");
-    expect(badge.className).toContain("bg-amber-500/20");
+    expect(badge.className).toContain("bg-amber-500/10");
     expect(badge.className).toContain("text-amber-300");
-    expect(badge.className).toContain("border-amber-500/40");
+    expect(badge.className).toContain("border-amber-500/20");
   });
 
   it("renders as a span element with pill styling", () => {
@@ -60,7 +60,7 @@ describe("StatusBadge", () => {
     const dot = badge.querySelector("[aria-hidden='true']");
     expect(dot).toBeInTheDocument();
     expect(dot!.className).toContain("rounded-full");
-    expect(dot!.className).toContain("bg-green-400");
+    expect(dot!.className).toContain("bg-emerald-400");
   });
 
   it("applies animate-pulse to the dot for running status", () => {

@@ -3,16 +3,18 @@ import { render, screen } from "@testing-library/react";
 import { QueueSummaryBar } from "./QueueSummaryBar";
 
 describe("QueueSummaryBar", () => {
-  it("displays total and pending counts", () => {
+  it("displays pending and decided counts", () => {
     render(<QueueSummaryBar total={10} pending={4} />);
-    expect(screen.getByText("Total: 10")).toBeInTheDocument();
-    expect(screen.getByText("Pending: 4")).toBeInTheDocument();
+    expect(screen.getByText("4 pending")).toBeInTheDocument();
+    expect(screen.getByText("6 decided")).toBeInTheDocument();
+    expect(screen.getByText("10 total")).toBeInTheDocument();
   });
 
   it("displays zero counts correctly", () => {
     render(<QueueSummaryBar total={0} pending={0} />);
-    expect(screen.getByText("Total: 0")).toBeInTheDocument();
-    expect(screen.getByText("Pending: 0")).toBeInTheDocument();
+    expect(screen.getByText("0 pending")).toBeInTheDocument();
+    expect(screen.getByText("0 decided")).toBeInTheDocument();
+    expect(screen.getByText("0 total")).toBeInTheDocument();
   });
 
   it("has aria-live=polite for screen reader updates", () => {

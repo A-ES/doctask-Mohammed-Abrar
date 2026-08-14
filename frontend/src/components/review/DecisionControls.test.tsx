@@ -1,5 +1,5 @@
-import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DecisionControls } from "./DecisionControls";
 import { QueueItem } from "@/types/review";
 
@@ -36,6 +36,14 @@ function makeDecidedItem(
 }
 
 describe("DecisionControls", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   describe("when item is pending", () => {
     it("renders Approve and Reject buttons", () => {
       render(
@@ -123,6 +131,9 @@ describe("DecisionControls", () => {
       fireEvent.change(textarea, { target: { value: "  Confirmed valid  " } });
       fireEvent.click(screen.getByRole("button", { name: /approve/i }));
 
+      // Wait for sweep animation timeout
+      act(() => { vi.advanceTimersByTime(400); });
+
       expect(onDecide).toHaveBeenCalledWith("approved", "Confirmed valid");
     });
 
@@ -140,6 +151,9 @@ describe("DecisionControls", () => {
       fireEvent.change(textarea, { target: { value: "Non-compliant" } });
       fireEvent.click(screen.getByRole("button", { name: /reject/i }));
 
+      // Wait for sweep animation timeout
+      act(() => { vi.advanceTimersByTime(400); });
+
       expect(onDecide).toHaveBeenCalledWith("rejected", "Non-compliant");
     });
 
@@ -155,6 +169,9 @@ describe("DecisionControls", () => {
       const textarea = screen.getByLabelText("Decision justification") as HTMLTextAreaElement;
       fireEvent.change(textarea, { target: { value: "Valid" } });
       fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+      // Wait for sweep animation timeout
+      act(() => { vi.advanceTimersByTime(400); });
 
       expect(textarea.value).toBe("");
     });

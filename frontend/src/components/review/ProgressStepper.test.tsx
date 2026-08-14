@@ -45,21 +45,22 @@ describe("ProgressStepper", () => {
       "ingest", "extract_text", "classify_document", "chunk", "embed",
     ];
 
-    render(
+    const { container } = render(
       <ProgressStepper completedNodes={completedNodes} currentNode={null} />
     );
 
-    const understandStage = screen.getByLabelText("Stage: Understand - Complete");
-    expect(understandStage).toHaveTextContent("✓");
+    // Complete stage uses an SVG checkmark with the draw-check class
+    const checkSvg = container.querySelector(".draw-check");
+    expect(checkSvg).toBeInTheDocument();
   });
 
   it("renders animated spinner for in-progress stage", () => {
-    render(
+    const { container } = render(
       <ProgressStepper completedNodes={[]} currentNode="ingest" />
     );
 
-    const understandStage = screen.getByLabelText("Stage: Understand - In progress");
-    const spinner = understandStage.querySelector(".animate-spin");
+    // In-progress stage uses a conic-spinner class
+    const spinner = container.querySelector(".conic-spinner");
     expect(spinner).toBeInTheDocument();
   });
 

@@ -127,8 +127,8 @@ describe("QueueList", () => {
         pending={7}
       />
     );
-    expect(screen.getByText("Total: 15")).toBeInTheDocument();
-    expect(screen.getByText("Pending: 7")).toBeInTheDocument();
+    expect(screen.getByText("7 pending")).toBeInTheDocument();
+    expect(screen.getByText("15 total")).toBeInTheDocument();
   });
 
   it("renders empty list when no items provided", () => {

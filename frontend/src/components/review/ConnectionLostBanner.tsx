@@ -24,24 +24,26 @@ export const ConnectionLostBanner: React.FC<ConnectionLostBannerProps> = ({
     <div
       role="alert"
       aria-live="assertive"
-      className="sticky top-0 z-50 flex items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/20 px-4 py-3 text-amber-300"
+      className="fixed top-16 left-1/2 z-50 -translate-x-1/2 flex items-center gap-3 rounded-xl border border-amber-500/20 bg-surface-elevated/90 px-5 py-3 shadow-2xl shadow-amber-500/10 backdrop-blur-xl"
     >
-      <div className="flex items-center gap-2">
-        <svg
-          aria-hidden="true"
-          className="h-5 w-5 flex-shrink-0 text-amber-400"
-          fill="none"
-          viewBox="0 0 24 24"
-          strokeWidth={1.5}
-          stroke="currentColor"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
-          />
-        </svg>
-        <span className="text-sm font-medium">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/15 warning-pulse">
+          <svg
+            aria-hidden="true"
+            className="h-3.5 w-3.5 text-amber-400"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={2}
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+            />
+          </svg>
+        </span>
+        <span className="text-sm font-medium text-amber-200/90">
           Connection lost. Data may be stale. Retrying...
         </span>
       </div>
@@ -50,11 +52,11 @@ export const ConnectionLostBanner: React.FC<ConnectionLostBannerProps> = ({
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss connection warning"
-          className="rounded p-1 text-amber-300 hover:bg-amber-500/30 hover:text-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-400"
+          className="ml-2 rounded-lg p-1.5 text-white/40 transition-colors hover:bg-white/[0.06] hover:text-white/70 focus:outline-none focus:ring-2 focus:ring-amber-400/50"
         >
           <svg
             aria-hidden="true"
-            className="h-4 w-4"
+            className="h-3.5 w-3.5"
             fill="none"
             viewBox="0 0 24 24"
             strokeWidth={2}

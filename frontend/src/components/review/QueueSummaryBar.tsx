@@ -4,14 +4,17 @@ export interface QueueSummaryBarProps {
 }
 
 export function QueueSummaryBar({ total, pending }: QueueSummaryBarProps) {
+  const decided = total - pending;
+
   return (
     <div
-      className="flex items-center gap-2 rounded bg-charcoal-900 px-3 py-1.5 text-xs text-gray-400"
+      className="mx-3 mt-3 mb-2 flex items-center gap-2 rounded-full bg-white/[0.03] border border-white/[0.06] px-4 py-1.5 text-xs"
       aria-live="polite"
     >
-      <span>Total: {total}</span>
-      <span aria-hidden="true">|</span>
-      <span>Pending: {pending}</span>
+      <span className="text-white/60 font-medium">{pending} pending</span>
+      <span className="h-3 w-px bg-white/10" aria-hidden="true" />
+      <span className="text-emerald-400/70">{decided} decided</span>
+      <span className="ml-auto text-white/30">{total} total</span>
     </div>
   );
 }

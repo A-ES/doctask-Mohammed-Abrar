@@ -11,11 +11,11 @@ interface CitationListProps {
 export function CitationList({ citations }: CitationListProps) {
   return (
     <section aria-label="Source citations">
-      <h3 className="mb-2 text-sm font-medium text-gray-300">
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-white/40">
         Source Citations ({citations.length})
       </h3>
       {citations.length === 0 ? (
-        <p className="text-sm text-gray-500">No citations available.</p>
+        <p className="text-sm text-white/30">No citations available.</p>
       ) : (
         <div className="flex flex-wrap gap-2">
           {citations.map((citation) => (

@@ -4,7 +4,7 @@ import { CitationChip } from "./CitationChip";
 import type { SourceCitation } from "@/types/review";
 
 describe("CitationChip", () => {
-  it("renders '[citation unverifiable]' with muted gray for unverifiable status", () => {
+  it("renders '[citation unverifiable]' with amber warning styling for unverifiable status", () => {
     const citation: SourceCitation = {
       claim_id: "c1",
       claim_text: "Some claim",
@@ -16,7 +16,7 @@ describe("CitationChip", () => {
 
     const chip = screen.getByText("[citation unverifiable]");
     expect(chip).toBeInTheDocument();
-    expect(chip).toHaveClass("bg-gray-500/20", "text-gray-400", "border-gray-500/40");
+    expect(chip).toHaveClass("bg-amber-500/10", "text-amber-300", "border-amber-500/20");
     expect(chip).toHaveAttribute("aria-label", "Citation unverifiable");
   });
 
@@ -32,7 +32,7 @@ describe("CitationChip", () => {
 
     const chip = screen.getByText("[citation unverifiable]");
     expect(chip).toBeInTheDocument();
-    expect(chip).toHaveClass("bg-gray-500/20");
+    expect(chip).toHaveClass("bg-amber-500/10");
     expect(chip).toHaveAttribute("aria-label", "Citation unverifiable");
   });
 
@@ -54,8 +54,8 @@ describe("CitationChip", () => {
 
     const chip = screen.getByText("§4.2(a)");
     expect(chip).toBeInTheDocument();
-    expect(chip).toHaveClass("text-slate-200", "border-slate-600");
-    expect(chip).not.toHaveClass("bg-gray-500/20");
+    expect(chip).toHaveClass("text-white/60", "border-white/[0.08]");
+    expect(chip).not.toHaveClass("bg-amber-500/10");
     expect(chip).toHaveAttribute("aria-label", "Citation grounded: §4.2(a)");
   });
 

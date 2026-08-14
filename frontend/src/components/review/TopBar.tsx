@@ -26,20 +26,30 @@ export function TopBar({
   onResume,
 }: TopBarProps) {
   return (
-    <header className="flex items-center gap-4 border-b border-charcoal-700 bg-charcoal-900 px-4 py-3">
-      <RunSelector
-        runs={runs}
-        selectedRunId={selectedRunId}
-        onSelectRun={onSelectRun}
-      />
-      <StatusBadge status={runStatus} />
-      {onResume && (
-        <ResumeButton
-          canResume={canResume}
-          isResuming={isResuming}
-          onResume={onResume}
+    <header className="sticky top-0 z-40 flex items-center justify-between gap-4 border-b border-white/[0.06] bg-white/[0.03] px-5 py-3 backdrop-blur-xl">
+      {/* Left: selector + status */}
+      <div className="flex items-center gap-3">
+        <RunSelector
+          runs={runs}
+          selectedRunId={selectedRunId}
+          onSelectRun={onSelectRun}
         />
-      )}
+        <StatusBadge status={runStatus} />
+        {onResume && (
+          <ResumeButton
+            canResume={canResume}
+            isResuming={isResuming}
+            onResume={onResume}
+          />
+        )}
+      </div>
+
+      {/* Right: pipeline summary counts */}
+      <div className="hidden items-center gap-3 text-xs text-white/40 sm:flex">
+        <span className="uppercase tracking-wider">Pipeline</span>
+        <span className="h-3 w-px bg-white/10" aria-hidden="true" />
+        <span className="text-white/60 font-medium capitalize">{runStatus}</span>
+      </div>
     </header>
   );
 }

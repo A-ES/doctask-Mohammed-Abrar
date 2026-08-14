@@ -238,17 +238,17 @@ describe("ReviewPage Integration", () => {
       expect(listPanel).toBeInTheDocument();
     });
 
-    it("detail panel has md:w-3/5 class for 60% width on desktop", async () => {
+    it("detail panel has md:flex-1 class for flexible width on desktop", async () => {
       renderReviewPage();
 
       await waitFor(() => {
         expect(screen.getByRole("listbox", { name: "Approval queue items" })).toBeInTheDocument();
       });
 
-      // The detail panel is the sibling with md:w-3/5
+      // The detail panel is the sibling with md:flex-1
       const listbox = screen.getByRole("listbox", { name: "Approval queue items" });
       const masterDetail = listbox.closest(".flex.h-full.w-full");
-      const detailPanel = masterDetail?.querySelector(".md\\:w-3\\/5");
+      const detailPanel = masterDetail?.querySelector(".md\\:flex-1");
       expect(detailPanel).toBeInTheDocument();
     });
   });

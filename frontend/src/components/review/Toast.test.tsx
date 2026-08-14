@@ -97,9 +97,8 @@ describe("Toast", () => {
       <Toast message="Test" visible={true} onDismiss={vi.fn()} />
     );
     const toast = screen.getByRole("status");
-    expect(toast.className).toContain("bg-blue-500/20");
-    expect(toast.className).toContain("text-blue-300");
-    expect(toast.className).toContain("border-blue-500/40");
+    expect(toast.className).toContain("border-indigo-500/20");
+    expect(toast.className).toContain("text-indigo-200");
   });
 
   it("applies error variant styling", () => {
@@ -107,8 +106,8 @@ describe("Toast", () => {
       <Toast message="Test" visible={true} onDismiss={vi.fn()} variant="error" />
     );
     const toast = screen.getByRole("status");
-    expect(toast.className).toContain("bg-red-500/20");
-    expect(toast.className).toContain("text-red-300");
+    expect(toast.className).toContain("border-rose-500/20");
+    expect(toast.className).toContain("text-rose-200");
   });
 
   it("applies warning variant styling", () => {
@@ -116,8 +115,8 @@ describe("Toast", () => {
       <Toast message="Test" visible={true} onDismiss={vi.fn()} variant="warning" />
     );
     const toast = screen.getByRole("status");
-    expect(toast.className).toContain("bg-amber-500/20");
-    expect(toast.className).toContain("text-amber-300");
+    expect(toast.className).toContain("border-amber-500/20");
+    expect(toast.className).toContain("text-amber-200");
   });
 
   it("displays 409 conflict message correctly", () => {

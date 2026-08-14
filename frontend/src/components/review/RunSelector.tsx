@@ -9,8 +9,8 @@ interface RunSelectorProps {
 
 const STATUS_DOT_COLORS: Record<RunSummary["status"], string> = {
   running: "bg-blue-400",
-  completed: "bg-green-400",
-  failed: "bg-red-400",
+  completed: "bg-emerald-400",
+  failed: "bg-rose-400",
   paused: "bg-amber-400",
 };
 
@@ -33,17 +33,17 @@ export function RunSelector({ runs, selectedRunId, onSelectRun }: RunSelectorPro
     <Select.Root value={selectedRunId ?? undefined} onValueChange={onSelectRun}>
       <Select.Trigger
         aria-label="Select pipeline run"
-        className="inline-flex items-center gap-2 rounded-md border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-gray-200 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+        className="inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-surface-elevated px-3 py-2 text-sm text-white/80 transition-all hover:border-white/[0.15] hover:bg-surface-elevated/80 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
       >
         <Select.Value placeholder="Select a run" />
-        <Select.Icon className="text-gray-400">
+        <Select.Icon className="text-white/40">
           <ChevronDownIcon />
         </Select.Icon>
       </Select.Trigger>
 
       <Select.Portal>
         <Select.Content
-          className="overflow-hidden rounded-md border border-gray-600 bg-gray-800 shadow-lg"
+          className="overflow-hidden rounded-lg border border-white/[0.08] bg-surface-card shadow-2xl shadow-black/40 backdrop-blur-xl"
           position="popper"
           sideOffset={4}
         >
@@ -52,7 +52,7 @@ export function RunSelector({ runs, selectedRunId, onSelectRun }: RunSelectorPro
               <Select.Item
                 key={run.id}
                 value={run.id}
-                className="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm text-gray-200 outline-none data-[highlighted]:bg-gray-700 data-[highlighted]:text-white"
+                className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-white/70 outline-none transition-colors data-[highlighted]:bg-white/[0.06] data-[highlighted]:text-white"
               >
                 <span
                   className={`h-2 w-2 rounded-full ${STATUS_DOT_COLORS[run.status]}`}
@@ -61,7 +61,7 @@ export function RunSelector({ runs, selectedRunId, onSelectRun }: RunSelectorPro
                 <Select.ItemText>
                   {formatRunId(run.id)}
                 </Select.ItemText>
-                <span className="ml-auto text-xs text-gray-400">
+                <span className="ml-auto text-xs text-white/30">
                   {formatTimestamp(run.started_at)}
                 </span>
               </Select.Item>

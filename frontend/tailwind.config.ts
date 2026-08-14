@@ -35,6 +35,18 @@ const config: Config = {
           900: '#1f2024',
           950: '#141518',
         },
+        // Surface system
+        surface: {
+          base: '#0c0f1a',
+          card: '#141927',
+          elevated: '#1c2235',
+        },
+        // Type identity colors
+        type: {
+          finding: '#f43f5e',
+          conflict: '#f59e0b',
+          update: '#8b5cf6',
+        },
         // Status colors for queue items
         status: {
           pending: {
@@ -60,14 +72,53 @@ const config: Config = {
         },
       },
       backgroundColor: {
-        'app-primary': '#0f0d2e',
-        'app-secondary': '#1f2024',
-        'app-surface': '#2d2f34',
+        'app-primary': '#0c0f1a',
+        'app-secondary': '#141927',
+        'app-surface': '#1c2235',
       },
       textColor: {
         'app-primary': '#f6f6f7',
         'app-secondary': '#c4c5ca',
         'app-muted': '#7b7d85',
+      },
+      animation: {
+        'spin-slow': 'spin-slow 2s linear infinite',
+        'fade-slide-up': 'fadeSlideUp 300ms ease-out forwards',
+        'sweep-right': 'sweepRight 400ms ease-out forwards',
+        'warning-pulse': 'warningPulse 2s ease-in-out infinite',
+        'draw-check': 'drawCheck 300ms ease-out forwards',
+        'connector-fill': 'connectorFill 500ms ease-out forwards',
+      },
+      keyframes: {
+        'spin-slow': {
+          to: { transform: 'rotate(360deg)' },
+        },
+        fadeSlideUp: {
+          from: { opacity: '0', transform: 'translateY(8px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
+        sweepRight: {
+          from: { transform: 'scaleX(0)' },
+          to: { transform: 'scaleX(1)' },
+        },
+        warningPulse: {
+          '0%, 100%': {
+            opacity: '0.4',
+            boxShadow: '0 0 0 0 rgba(251,191,36,0.3)',
+          },
+          '50%': {
+            opacity: '1',
+            boxShadow: '0 0 8px 2px rgba(251,191,36,0.2)',
+          },
+        },
+        drawCheck: {
+          from: { strokeDashoffset: '24' },
+          to: { strokeDashoffset: '0' },
+        },
+        connectorFill: {
+          from: { width: '0%' },
+          to: { width: '100%' },
+        },
       },
     },
   },

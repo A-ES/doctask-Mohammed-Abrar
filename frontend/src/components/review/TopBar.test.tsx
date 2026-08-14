@@ -33,7 +33,8 @@ describe("TopBar", () => {
       />
     );
 
-    expect(screen.getByText("failed")).toBeInTheDocument();
+    // "failed" appears both in the StatusBadge and in the pipeline summary
+    expect(screen.getByRole("status")).toHaveTextContent("failed");
   });
 
   it("renders as a header element", () => {
@@ -49,7 +50,7 @@ describe("TopBar", () => {
     expect(screen.getByRole("banner")).toBeInTheDocument();
   });
 
-  it("applies dark theme styling classes", () => {
+  it("applies frosted-glass styling classes", () => {
     render(
       <TopBar
         runs={mockRuns}
@@ -60,9 +61,9 @@ describe("TopBar", () => {
     );
 
     const header = screen.getByRole("banner");
-    expect(header.className).toContain("bg-charcoal-900");
+    expect(header.className).toContain("backdrop-blur-xl");
     expect(header.className).toContain("border-b");
-    expect(header.className).toContain("border-charcoal-700");
+    expect(header.className).toContain("border-white/[0.06]");
   });
 
   it("uses flex row layout with gap", () => {

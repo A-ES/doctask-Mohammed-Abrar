@@ -19,42 +19,42 @@ export function SourceLocationTable({ citations }: SourceLocationTableProps) {
 
   return (
     <section aria-label="Source locations">
-      <h3 className="mb-2 text-sm font-medium text-gray-300">
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-white/40">
         Source Locations
       </h3>
-      <div className="overflow-x-auto rounded-md border border-charcoal-600">
-        <table className="w-full text-sm text-gray-200">
-          <thead className="bg-charcoal-800 text-xs uppercase text-gray-400">
+      <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
+        <table className="w-full text-sm text-white/70">
+          <thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-white/30">
             <tr>
-              <th scope="col" className="px-3 py-2 text-left">
+              <th scope="col" className="px-3 py-2.5 text-left font-medium">
                 Page
               </th>
-              <th scope="col" className="px-3 py-2 text-left">
+              <th scope="col" className="px-3 py-2.5 text-left font-medium">
                 Section
               </th>
-              <th scope="col" className="px-3 py-2 text-left">
+              <th scope="col" className="px-3 py-2.5 text-left font-medium">
                 Clause Ref
               </th>
-              <th scope="col" className="px-3 py-2 text-left">
+              <th scope="col" className="px-3 py-2.5 text-left font-medium">
                 Offset Range
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-charcoal-700">
+          <tbody className="divide-y divide-white/[0.04]">
             {locatedCitations.map((citation) => {
               const loc = citation.source_location!;
               return (
-                <tr key={citation.claim_id} className="hover:bg-charcoal-800/50">
-                  <td className="px-3 py-2">
+                <tr key={citation.claim_id} className="transition-colors hover:bg-white/[0.03]">
+                  <td className="px-3 py-2.5 text-white/60">
                     {loc.page_number !== null ? loc.page_number : "—"}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2.5 text-white/60">
                     {loc.section_id ?? "—"}
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2.5 text-white/60">
                     {loc.clause_ref ?? "—"}
                   </td>
-                  <td className="px-3 py-2 font-mono text-xs">
+                  <td className="px-3 py-2.5 font-mono text-xs text-white/50">
                     {loc.start_offset}–{loc.end_offset}
                   </td>
                 </tr>

@@ -14,9 +14,9 @@ export interface ToastProps {
 }
 
 const VARIANT_STYLES: Record<string, string> = {
-  info: "bg-blue-500/20 text-blue-300 border-blue-500/40",
-  error: "bg-red-500/20 text-red-300 border-red-500/40",
-  warning: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+  info: "border-indigo-500/20 text-indigo-200 shadow-indigo-500/10",
+  error: "border-rose-500/20 text-rose-200 shadow-rose-500/10",
+  warning: "border-amber-500/20 text-amber-200 shadow-amber-500/10",
 };
 
 /**
@@ -54,9 +54,9 @@ export function Toast({
       role="status"
       aria-live="polite"
       aria-atomic="true"
-      className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded border px-4 py-3 shadow-lg ${VARIANT_STYLES[variant]}`}
+      className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl border bg-surface-elevated/95 px-4 py-3 shadow-2xl backdrop-blur-xl ${VARIANT_STYLES[variant]}`}
     >
-      <span className="text-sm">{message}</span>
+      <span className="text-sm font-medium">{message}</span>
       <button
         type="button"
         onClick={() => {
@@ -64,9 +64,11 @@ export function Toast({
           onDismiss();
         }}
         aria-label="Dismiss notification"
-        className="ml-2 rounded p-1 text-current opacity-70 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-current"
+        className="ml-2 rounded-lg p-1 text-current opacity-50 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-white/20"
       >
-        ✕
+        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
       </button>
     </div>
   );

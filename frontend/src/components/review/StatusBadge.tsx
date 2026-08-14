@@ -7,16 +7,16 @@ interface StatusBadgeProps {
 }
 
 const RUN_STATUS_COLORS: Record<RunStatus, string> = {
-  running: "bg-blue-500/20 text-blue-300 border-blue-500/40",
-  completed: "bg-green-500/20 text-green-300 border-green-500/40",
-  failed: "bg-red-500/20 text-red-300 border-red-500/40",
-  paused: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+  running: "bg-blue-500/10 text-blue-300 border-blue-500/20",
+  completed: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20",
+  failed: "bg-rose-500/10 text-rose-300 border-rose-500/20",
+  paused: "bg-amber-500/10 text-amber-300 border-amber-500/20",
 };
 
 const RUN_STATUS_DOT_COLORS: Record<RunStatus, string> = {
   running: "bg-blue-400",
-  completed: "bg-green-400",
-  failed: "bg-red-400",
+  completed: "bg-emerald-400",
+  failed: "bg-rose-400",
   paused: "bg-amber-400",
 };
 

@@ -1,5 +1,5 @@
-import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DetailPanel } from "./DetailPanel";
 import type { QueueItem } from "@/types/review";
 
@@ -43,6 +43,14 @@ const mockItem: QueueItem = {
 };
 
 describe("DetailPanel", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("renders placeholder when item is null", () => {
     render(
       <DetailPanel item={null} onDecide={vi.fn()} isSubmitting={false} />
@@ -175,6 +183,9 @@ describe("DetailPanel", () => {
     const textarea = screen.getByLabelText("Decision justification");
     fireEvent.change(textarea, { target: { value: "Looks good" } });
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    // Wait for sweep animation timeout
+    act(() => { vi.advanceTimersByTime(400); });
 
     expect(onDecide).toHaveBeenCalledWith("approved", "Looks good");
   });

@@ -147,44 +147,49 @@ export function ReviewPage() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-screen flex-col bg-charcoal-900 text-gray-100">
-      <TopBar
-        runs={runs}
-        selectedRunId={selectedRunId}
-        runStatus={runStatus}
-        onSelectRun={handleSelectRun}
-      />
+    <div className="relative flex h-screen flex-col bg-surface-base text-white/90 overflow-hidden">
+      {/* Background radial gradient for depth */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(99,102,241,0.05),transparent_50%)] pointer-events-none" aria-hidden="true" />
 
-      <ProgressStepper
-        completedNodes={completedNodes}
-        currentNode={currentNode}
-      />
-
-      <ConnectionLostBanner connectionLost={connectionLost} />
-
-      <main className="flex-1 overflow-hidden">
-        <MasterDetail
-          hasSelection={selectedItemId !== null}
-          onBack={handleBack}
-          listPanel={
-            <QueueList
-              items={sortedItems}
-              selectedItemId={selectedItemId}
-              optimisticStatuses={optimisticStatuses}
-              onSelectItem={selectItem}
-              total={total}
-              pending={pending}
-            />
-          }
-          detailPanel={
-            <DetailPanel
-              item={selectedItem}
-              onDecide={handleDecision}
-              isSubmitting={isSubmitting}
-            />
-          }
+      <div className="relative flex flex-col h-full">
+        <TopBar
+          runs={runs}
+          selectedRunId={selectedRunId}
+          runStatus={runStatus}
+          onSelectRun={handleSelectRun}
         />
-      </main>
+
+        <ProgressStepper
+          completedNodes={completedNodes}
+          currentNode={currentNode}
+        />
+
+        <ConnectionLostBanner connectionLost={connectionLost} />
+
+        <main className="flex-1 overflow-hidden">
+          <MasterDetail
+            hasSelection={selectedItemId !== null}
+            onBack={handleBack}
+            listPanel={
+              <QueueList
+                items={sortedItems}
+                selectedItemId={selectedItemId}
+                optimisticStatuses={optimisticStatuses}
+                onSelectItem={selectItem}
+                total={total}
+                pending={pending}
+              />
+            }
+            detailPanel={
+              <DetailPanel
+                item={selectedItem}
+                onDecide={handleDecision}
+                isSubmitting={isSubmitting}
+              />
+            }
+          />
+        </main>
+      </div>
     </div>
   );
 }

@@ -23,21 +23,26 @@ export function QueueList({
   pending,
 }: QueueListFullProps) {
   return (
-    <div className="flex h-full flex-col bg-charcoal-800">
+    <div className="flex h-full flex-col bg-surface-base">
       <QueueSummaryBar total={total} pending={pending} />
       <div
         role="listbox"
         aria-label="Approval queue items"
-        className="flex-1 space-y-2 overflow-y-auto p-2"
+        className="flex-1 space-y-2 overflow-y-auto p-3"
       >
-        {items.map((item) => (
-          <QueueItemCard
+        {items.map((item, index) => (
+          <div
             key={item.id}
-            item={item}
-            isSelected={item.id === selectedItemId}
-            isLoading={item.id in optimisticStatuses}
-            onClick={() => onSelectItem(item.id)}
-          />
+            className="animate-stagger"
+            style={{ "--index": index } as React.CSSProperties}
+          >
+            <QueueItemCard
+              item={item}
+              isSelected={item.id === selectedItemId}
+              isLoading={item.id in optimisticStatuses}
+              onClick={() => onSelectItem(item.id)}
+            />
+          </div>
         ))}
       </div>
     </div>

@@ -57,8 +57,7 @@ describe("ConnectionLostBanner", () => {
   it("applies amber/warning styling classes", () => {
     render(<ConnectionLostBanner connectionLost={true} />);
     const banner = screen.getByRole("alert");
-    expect(banner.className).toContain("bg-amber-500/20");
-    expect(banner.className).toContain("text-amber-300");
-    expect(banner.className).toContain("border-amber-500/40");
+    expect(banner.className).toContain("backdrop-blur-xl");
+    expect(banner.className).toContain("border-amber-500/20");
   });
 });

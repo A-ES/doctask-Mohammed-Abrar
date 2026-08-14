@@ -5,6 +5,20 @@ import type {
   RunSummary,
   PipelineProgress,
 } from "@/types/review";
+import {
+  mockFetchRuns,
+  mockFetchQueue,
+  mockFetchItem,
+  mockSubmitDecision,
+  mockFetchRunProgress,
+  mockResumeRun,
+} from "./mockData";
+
+/**
+ * When VITE_MOCK_API=true, all API calls return mock data.
+ * Toggle in .env or .env.local: VITE_MOCK_API=true
+ */
+const USE_MOCK = import.meta.env.VITE_MOCK_API === "true";
 
 /**
  * Base URL for API requests. Configurable via VITE_API_BASE_URL environment variable.
@@ -85,6 +99,7 @@ async function safeFetch(
  * GET /approval/runs/{run_id}/queue
  */
 export async function fetchQueue(runId: string): Promise<QueueListResponse> {
+  if (USE_MOCK) return mockFetchQueue(runId);
   const response = await safeFetch(`${BASE_URL}/approval/runs/${runId}/queue`);
   return handleResponse<QueueListResponse>(response);
 }
@@ -94,6 +109,7 @@ export async function fetchQueue(runId: string): Promise<QueueListResponse> {
  * GET /approval/items/{item_id}
  */
 export async function fetchItem(itemId: string): Promise<QueueItem> {
+  if (USE_MOCK) return mockFetchItem(itemId);
   const response = await safeFetch(`${BASE_URL}/approval/items/${itemId}`);
   return handleResponse<QueueItem>(response);
 }
@@ -110,6 +126,7 @@ export async function submitDecision(
     justification: string;
   }
 ): Promise<DecisionResponse> {
+  if (USE_MOCK) return mockSubmitDecision(itemId, request);
   const response = await safeFetch(
     `${BASE_URL}/approval/items/${itemId}/decide`,
     {
@@ -126,6 +143,7 @@ export async function submitDecision(
  * GET /runs
  */
 export async function fetchRuns(): Promise<RunSummary[]> {
+  if (USE_MOCK) return mockFetchRuns();
   const response = await safeFetch(`${BASE_URL}/runs`);
   return handleResponse<RunSummary[]>(response);
 }
@@ -135,6 +153,7 @@ export async function fetchRuns(): Promise<RunSummary[]> {
  * POST /runs/{run_id}/resume
  */
 export async function resumeRun(runId: string): Promise<unknown> {
+  if (USE_MOCK) return mockResumeRun(runId);
   const response = await safeFetch(`${BASE_URL}/runs/${runId}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -149,6 +168,7 @@ export async function resumeRun(runId: string): Promise<unknown> {
 export async function fetchRunProgress(
   runId: string
 ): Promise<PipelineProgress> {
+  if (USE_MOCK) return mockFetchRunProgress(runId);
   const response = await safeFetch(`${BASE_URL}/runs/${runId}/history`);
   return handleResponse<PipelineProgress>(response);
 }
