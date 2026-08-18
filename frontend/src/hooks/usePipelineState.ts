@@ -2,6 +2,10 @@
  * Hook to poll pipeline run state and derive node statuses + edge decisions.
  * Drives the canvas directly from LangGraph checkpointer state.
  * Falls back to mock data when VITE_MOCK_API=true or API unavailable.
+ *
+ * KEY DESIGN: State diffing — only signals transitions when node statuses
+ * actually change. Animations fire on genuine state transitions, not on
+ * every poll tick that returns the same data.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { NodeStatus, EdgeDecision, PipelineRunState } from '@/types/pipeline';
@@ -24,9 +28,18 @@ const MOCK_STATE: PipelineRunState = {
   run_status: 'running',
 };
 
+export interface NodeTransition {
+  nodeId: string;
+  from: NodeStatus;
+  to: NodeStatus;
+  timestamp: number;
+}
+
 export interface DerivedPipelineView {
   nodeStatuses: Record<string, NodeStatus>;
   edgeDecisions: Record<string, EdgeDecision>;
+  /** Nodes whose status changed on the most recent poll (empty if no change) */
+  recentTransitions: NodeTransition[];
   runState: PipelineRunState | null;
   isPolling: boolean;
   error: Error | null;
@@ -37,42 +50,31 @@ function deriveNodeStatus(
   nodeName: string,
   state: PipelineRunState
 ): NodeStatus {
-  // Check completed
   if (state.completed_nodes.includes(nodeName)) return 'complete';
-
-  // Check skipped
   if (state.skipped_nodes.some((s) => s.node_name === nodeName)) return 'skipped';
 
-  // Check if current node
   if (state.current_node === nodeName) {
     if (state.node_status === 'error') {
-      // Check if retrying
       const retryCount = state.retries[nodeName] ?? 0;
       if (retryCount > 0 && state.error_type === 'transient') return 'retrying';
       return 'failed';
     }
-    // Active/processing
     return 'processing';
   }
 
-  // Check if node has been escalated (errored and flow went to route_to_queue)
-  // Heuristic: if a node has retries at max and isn't completed/current, it was escalated
   if (state.retries[nodeName] && state.retries[nodeName] >= 3) return 'escalated';
-
   return 'ready';
 }
 
 function deriveEdgeDecisions(state: PipelineRunState): Record<string, EdgeDecision> {
   const decisions: Record<string, EdgeDecision> = {};
 
-  // Check for retries — show retry edges
   for (const [nodeName, count] of Object.entries(state.retries)) {
     if (count > 0) {
       decisions[`retry-${nodeName}`] = 'retry';
     }
   }
 
-  // Check for skipped nodes — edge into them is "skip"
   for (const skipped of state.skipped_nodes) {
     const nodeIdx = PIPELINE_NODES.indexOf(skipped.node_name as typeof PIPELINE_NODES[number]);
     if (nodeIdx > 0) {
@@ -81,7 +83,6 @@ function deriveEdgeDecisions(state: PipelineRunState): Record<string, EdgeDecisi
     }
   }
 
-  // Check for escalation — if a node failed and flow went to route_to_queue
   if (state.node_status === 'error' && state.current_node !== 'route_to_queue') {
     decisions[`e-${state.current_node}-route_to_queue`] = 'escalate';
   }
@@ -94,7 +95,6 @@ async function fetchRunState(runId: string): Promise<PipelineRunState> {
     await new Promise((r) => setTimeout(r, 100));
     return MOCK_STATE;
   }
-
   const response = await fetch(`${BASE_URL}/runs/${runId}/state`);
   if (!response.ok) throw new Error(`Failed to fetch run state: ${response.status}`);
   return response.json();
@@ -102,11 +102,13 @@ async function fetchRunState(runId: string): Promise<PipelineRunState> {
 
 export function usePipelineState(runId: string | null): DerivedPipelineView {
   const [runState, setRunState] = useState<PipelineRunState | null>(null);
+  const [recentTransitions, setRecentTransitions] = useState<NodeTransition[]>([]);
   const [isPolling, setIsPolling] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [connectionLost, setConnectionLost] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const prevStatusesRef = useRef<Record<string, NodeStatus>>({});
 
   const poll = useCallback(async () => {
     if (!runId) return;
@@ -114,6 +116,36 @@ export function usePipelineState(runId: string | null): DerivedPipelineView {
     try {
       const state = await fetchRunState(runId);
       if (!mountedRef.current) return;
+
+      // Derive new statuses
+      const newStatuses: Record<string, NodeStatus> = {};
+      for (const node of PIPELINE_NODES) {
+        newStatuses[node] = deriveNodeStatus(node, state);
+      }
+
+      // Diff against previous — only emit transitions for actual changes
+      const transitions: NodeTransition[] = [];
+      const prevStatuses = prevStatusesRef.current;
+      for (const node of PIPELINE_NODES) {
+        const prev = prevStatuses[node];
+        const next = newStatuses[node];
+        if (prev !== undefined && prev !== next) {
+          transitions.push({ nodeId: node, from: prev, to: next, timestamp: Date.now() });
+        }
+      }
+
+      // Update ref for next diff
+      prevStatusesRef.current = newStatuses;
+
+      // Only update transitions state if there are actual changes
+      if (transitions.length > 0) {
+        setRecentTransitions(transitions);
+        // Clear transitions after animation duration (500ms)
+        setTimeout(() => {
+          if (mountedRef.current) setRecentTransitions([]);
+        }, 500);
+      }
+
       setRunState(state);
       setError(null);
       setConnectionLost(false);
@@ -121,7 +153,6 @@ export function usePipelineState(runId: string | null): DerivedPipelineView {
       if (!mountedRef.current) return;
       setError(err instanceof Error ? err : new Error('Unknown error'));
       setConnectionLost(true);
-      // Keep existing state — don't clear on error
     } finally {
       if (mountedRef.current) setIsPolling(false);
     }
@@ -130,13 +161,8 @@ export function usePipelineState(runId: string | null): DerivedPipelineView {
   useEffect(() => {
     mountedRef.current = true;
     if (!runId) return;
-
-    // Initial fetch
     poll();
-
-    // Start polling
     intervalRef.current = setInterval(poll, POLL_INTERVAL);
-
     return () => {
       mountedRef.current = false;
       if (intervalRef.current) {
@@ -146,7 +172,7 @@ export function usePipelineState(runId: string | null): DerivedPipelineView {
     };
   }, [runId, poll]);
 
-  // Derive view from state
+  // Derive current view
   const nodeStatuses: Record<string, NodeStatus> = {};
   const edgeDecisions: Record<string, EdgeDecision> = {};
 
@@ -156,11 +182,10 @@ export function usePipelineState(runId: string | null): DerivedPipelineView {
     }
     Object.assign(edgeDecisions, deriveEdgeDecisions(runState));
   } else {
-    // Default all to ready when no state
     for (const node of PIPELINE_NODES) {
       nodeStatuses[node] = 'ready';
     }
   }
 
-  return { nodeStatuses, edgeDecisions, runState, isPolling, error, connectionLost };
+  return { nodeStatuses, edgeDecisions, recentTransitions, runState, isPolling, error, connectionLost };
 }

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   ReactFlow,
   Background,
@@ -13,6 +13,7 @@ import { PipelineNode } from '@/components/pipeline/PipelineNode';
 import { MergeNode } from '@/components/pipeline/MergeNode';
 import { AddNode } from '@/components/pipeline/AddNode';
 import { SmoothEdge } from '@/components/pipeline/SmoothEdge';
+import { NodeDetailPanel } from '@/components/pipeline/NodeDetailPanel';
 import { usePipelineState } from '@/hooks/usePipelineState';
 import type { NodeStatus, EdgeDecision } from '@/types/pipeline';
 
@@ -324,9 +325,11 @@ function buildEdges(
 
 export function PipelineCanvas() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeLabel, setSelectedNodeLabel] = useState('');
 
   // Poll real state (or mock when VITE_MOCK_API=true)
-  const { nodeStatuses, edgeDecisions, runState, connectionLost } = usePipelineState('run-001');
+  const { nodeStatuses, edgeDecisions, recentTransitions, runState, connectionLost } = usePipelineState('run-001');
 
   const nodeTypes = useMemo(() => ({
     stageNode: PipelineNode,
@@ -338,8 +341,35 @@ export function PipelineCanvas() {
     smoothEdge: SmoothEdge,
   }), []);
 
-  const nodes = useMemo(() => buildNodes(nodeStatuses), [nodeStatuses]);
+  // Track which nodes just transitioned for animation
+  const transitionedNodeIds = useMemo(
+    () => new Set(recentTransitions.map((t) => t.nodeId)),
+    [recentTransitions]
+  );
+
+  const nodes = useMemo(() => {
+    const built = buildNodes(nodeStatuses);
+    // Annotate nodes that just transitioned
+    return built.map((node) => ({
+      ...node,
+      data: {
+        ...node.data,
+        justTransitioned: transitionedNodeIds.has(node.id),
+      },
+    }));
+  }, [nodeStatuses, transitionedNodeIds]);
   const edges = useMemo(() => buildEdges(nodeStatuses, edgeDecisions), [nodeStatuses, edgeDecisions]);
+
+  const handleNodeClick = useCallback((_: unknown, node: Node) => {
+    // Don't open panel for add nodes or start node
+    if (node.id.startsWith('add-') || node.id === 'start') return;
+    setSelectedNodeId(node.id);
+    setSelectedNodeLabel((node.data as { label?: string }).label ?? node.id);
+  }, []);
+
+  const handleClosePanel = useCallback(() => {
+    setSelectedNodeId(null);
+  }, []);
 
   return (
     <div className="flex h-screen w-screen bg-[#0b0f19] text-white overflow-hidden">
@@ -356,6 +386,7 @@ export function PipelineCanvas() {
             edgeTypes={edgeTypes}
             nodesDraggable={false}
             edgesFocusable={false}
+            onNodeClick={handleNodeClick}
             fitView
             fitViewOptions={{ padding: 0.2 }}
             proOptions={{ hideAttribution: true }}
@@ -372,6 +403,13 @@ export function PipelineCanvas() {
               position="bottom-right"
             />
           </ReactFlow>
+
+          {/* Detail panel overlay */}
+          <NodeDetailPanel
+            nodeId={selectedNodeId}
+            nodeLabel={selectedNodeLabel}
+            onClose={handleClosePanel}
+          />
         </div>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useRef, useEffect, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { NodeStatus } from '@/types/pipeline';
 import { STATUS_CONFIG } from '@/utils/pipelineColors';
@@ -7,6 +7,8 @@ interface PipelineNodeData {
   label: string;
   status: NodeStatus;
   icon: string;
+  /** Set by parent when this node just transitioned (from usePipelineState diff) */
+  justTransitioned?: boolean;
   [key: string]: unknown;
 }
 
@@ -56,6 +58,18 @@ function NodeIcon({ icon }: { icon: string }) {
           <path d="M12 8v4m0 3h.01" />
         </svg>
       );
+    case 'check':
+      return (
+        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+          <path d="M5 12l5 5L20 7" />
+        </svg>
+      );
+    case 'alert':
+      return (
+        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <path d="M12 9v4m0 3h.01M12 3l9.5 16.5H2.5L12 3z" />
+        </svg>
+      );
     default:
       return (
         <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -68,27 +82,48 @@ function NodeIcon({ icon }: { icon: string }) {
 export const PipelineNode = memo(function PipelineNode({ data }: { data: PipelineNodeData }) {
   const { label, status, icon } = data;
   const config = STATUS_CONFIG[status];
+  const prevStatusRef = useRef<NodeStatus>(status);
+  const [transitioning, setTransitioning] = useState(false);
+
+  // Detect actual status change (from prop diff, not poll tick)
+  useEffect(() => {
+    if (prevStatusRef.current !== status) {
+      setTransitioning(true);
+      prevStatusRef.current = status;
+      // Clear transition flag after animation completes
+      const timer = setTimeout(() => setTransitioning(false), 400);
+      return () => clearTimeout(timer);
+    }
+  }, [status]);
+
+  // Show check icon briefly when completing, alert icon when failing
+  const displayIcon = transitioning && status === 'complete' ? 'check'
+    : transitioning && (status === 'failed' || status === 'escalated') ? 'alert'
+    : icon;
 
   return (
     <div
       className={`
         relative w-[180px] rounded-lg border-t-2 bg-[#141927]/90 backdrop-blur-sm
-        px-3 py-3 flex flex-col items-center gap-1.5
+        px-3 py-3 flex flex-col items-center gap-1.5 cursor-pointer
+        hover:bg-[#1a2035]/90
+        transition-all duration-300 ease-out
         ${config.border} ${config.glow}
-        ${status === 'processing' ? 'animate-pulse' : ''}
+        ${status === 'processing' || status === 'retrying' ? 'node-processing' : ''}
+        ${transitioning ? 'scale-[1.03]' : ''}
       `}
     >
       <Handle type="target" position={Position.Top} className="!w-2 !h-2 !bg-white/20 !border-white/30" />
 
-      <div className={`${config.text}`}>
-        <NodeIcon icon={icon} />
+      <div className={`transition-colors duration-300 ${config.text}`}>
+        <NodeIcon icon={displayIcon} />
       </div>
 
       <span className="text-sm font-medium text-white/90">{label}</span>
 
       <div className="flex items-center gap-1.5">
-        <span className={`w-1.5 h-1.5 rounded-full ${config.dot}`} />
-        <span className={`text-xs ${config.text}`}>{config.label}</span>
+        <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${config.dot}`} />
+        <span className={`text-xs transition-colors duration-300 ${config.text}`}>{config.label}</span>
       </div>
 
       <Handle type="source" position={Position.Bottom} className="!w-2 !h-2 !bg-white/20 !border-white/30" />
