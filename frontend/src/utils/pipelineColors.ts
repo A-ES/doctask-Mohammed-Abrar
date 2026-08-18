@@ -22,6 +22,13 @@ export const STATUS_CONFIG: Record<NodeStatus, { border: string; glow: string; t
     label: 'Complete',
     dot: 'bg-emerald-400',
   },
+  skipped: {
+    border: 'border-amber-400/60',
+    glow: '',
+    text: 'text-amber-300/70',
+    label: 'Skipped',
+    dot: 'bg-amber-400/60',
+  },
   escalated: {
     border: 'border-amber-500',
     glow: 'shadow-md shadow-amber-500/15',
@@ -35,5 +42,12 @@ export const STATUS_CONFIG: Record<NodeStatus, { border: string; glow: string; t
     text: 'text-rose-300',
     label: 'Failed',
     dot: 'bg-rose-400',
+  },
+  retrying: {
+    border: 'border-indigo-400',
+    glow: 'shadow-md shadow-indigo-400/15',
+    text: 'text-indigo-300',
+    label: 'Retrying...',
+    dot: 'bg-indigo-400 animate-pulse',
   },
 };
