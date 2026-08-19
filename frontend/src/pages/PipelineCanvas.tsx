@@ -21,7 +21,99 @@ import type { NodeStatus, EdgeDecision } from '@/types/pipeline';
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
+// ─── Custom Checkbox ─────────────────────────────────────────────────────────
+
+function CustomCheckbox({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
+  return (
+    <label className="group flex items-center gap-2.5 px-2 py-1.5 -mx-2 rounded-md cursor-pointer hover:bg-white/[0.04] transition-colors">
+      <button
+        role="checkbox"
+        aria-checked={checked}
+        onClick={onChange}
+        className={`
+          flex items-center justify-center w-4 h-4 rounded border transition-all duration-150
+          ${checked
+            ? 'bg-indigo-500 border-indigo-500 shadow-sm shadow-indigo-500/30'
+            : 'border-white/25 bg-white/[0.04] group-hover:border-white/40'
+          }
+        `}
+      >
+        {checked && (
+          <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2.5 6l2.5 2.5 4.5-5" />
+          </svg>
+        )}
+      </button>
+      <span className={`text-[13px] transition-colors ${checked ? 'text-white/90' : 'text-white/60 group-hover:text-white/80'}`}>
+        {label}
+      </span>
+    </label>
+  );
+}
+
+// ─── Collapsible Filter Section ──────────────────────────────────────────────
+
+function FilterSection({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center justify-between w-full py-1.5 group"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/45 group-hover:text-white/60 transition-colors">
+          {title}
+        </span>
+        <svg
+          className={`w-3 h-3 text-white/30 group-hover:text-white/50 transition-all duration-200 ${open ? '' : '-rotate-90'}`}
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+        >
+          <path d="M3 4.5l3 3 3-3" />
+        </svg>
+      </button>
+      {open && (
+        <div className="mt-1.5 space-y-0.5">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Sidebar ─────────────────────────────────────────────────────────────────
+
+interface RunCardData {
+  label: string;
+  status: 'running' | 'completed' | 'failed';
+  active: boolean;
+}
+
+const RUNS: RunCardData[] = [
+  { label: 'Run #001 — Loan Doc', status: 'running', active: true },
+  { label: 'Run #002 — Policy Rev', status: 'completed', active: false },
+  { label: 'Run #003 — Disclosure', status: 'failed', active: false },
+];
+
+const STATUS_DOT_COLOR: Record<string, string> = {
+  running: 'bg-indigo-400',
+  completed: 'bg-emerald-400',
+  failed: 'bg-rose-400',
+};
+
 function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  // Local checkbox state (filter state — purely UI for now)
+  const [statusFilters, setStatusFilters] = useState<Record<string, boolean>>({});
+  const [docTypeFilters, setDocTypeFilters] = useState<Record<string, boolean>>({});
+  const [playbookFilters, setPlaybookFilters] = useState<Record<string, boolean>>({});
+
+  const toggle = (setter: React.Dispatch<React.SetStateAction<Record<string, boolean>>>, key: string) => {
+    setter((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
   return (
     <div
       className={`h-full border-r border-white/[0.06] bg-[#0f1320] transition-all duration-200 flex flex-col ${
@@ -39,64 +131,77 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
       </button>
 
       {collapsed ? null : (
-        <div className="flex-1 overflow-y-auto p-4 space-y-5">
-          <div>
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+          {/* Search */}
+          <div className="relative">
+            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30 pointer-events-none" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <circle cx="7" cy="7" r="5" />
+              <path d="M11 11l3.5 3.5" strokeLinecap="round" />
+            </svg>
             <input
               type="text"
               placeholder="Search runs..."
-              className="w-full rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-sm text-white/80 placeholder-white/30 focus:border-indigo-500/50 focus:outline-none focus:ring-1 focus:ring-indigo-500/30"
+              className="w-full rounded-lg border border-white/[0.08] bg-white/[0.03] pl-8 pr-3 py-2 text-[13px] text-white/80 placeholder-white/30 transition-all focus:border-indigo-500/60 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:bg-white/[0.05] hover:border-white/[0.15]"
             />
           </div>
 
-          <div>
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-white/40 mb-2">Status</h3>
-            <div className="space-y-1.5">
-              {['Running', 'Completed', 'Failed', 'Paused'].map((status) => (
-                <label key={status} className="flex items-center gap-2 text-sm text-white/60 hover:text-white/80 cursor-pointer">
-                  <input type="checkbox" className="rounded border-white/20 bg-white/5 text-indigo-500 focus:ring-indigo-500/30 h-3.5 w-3.5" />
-                  {status}
-                </label>
-              ))}
-            </div>
-          </div>
+          {/* Filters */}
+          <FilterSection title="Status">
+            {['Running', 'Completed', 'Failed', 'Paused'].map((s) => (
+              <CustomCheckbox
+                key={s}
+                label={s}
+                checked={!!statusFilters[s]}
+                onChange={() => toggle(setStatusFilters, s)}
+              />
+            ))}
+          </FilterSection>
 
-          <div>
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-white/40 mb-2">Document Type</h3>
-            <div className="space-y-1.5">
-              {['Loan Agreement', 'Disclosure', 'Policy Manual', 'Amendment'].map((type) => (
-                <label key={type} className="flex items-center gap-2 text-sm text-white/60 hover:text-white/80 cursor-pointer">
-                  <input type="checkbox" className="rounded border-white/20 bg-white/5 text-indigo-500 focus:ring-indigo-500/30 h-3.5 w-3.5" />
-                  {type}
-                </label>
-              ))}
-            </div>
-          </div>
+          <FilterSection title="Document Type">
+            {['Loan Agreement', 'Disclosure', 'Policy Manual', 'Amendment'].map((t) => (
+              <CustomCheckbox
+                key={t}
+                label={t}
+                checked={!!docTypeFilters[t]}
+                onChange={() => toggle(setDocTypeFilters, t)}
+              />
+            ))}
+          </FilterSection>
 
-          <div>
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-white/40 mb-2">Playbook</h3>
-            <div className="space-y-1.5">
-              {['Microfinance v1', 'Consumer Lending', 'Regulatory Check'].map((pb) => (
-                <label key={pb} className="flex items-center gap-2 text-sm text-white/60 hover:text-white/80 cursor-pointer">
-                  <input type="checkbox" className="rounded border-white/20 bg-white/5 text-indigo-500 focus:ring-indigo-500/30 h-3.5 w-3.5" />
-                  {pb}
-                </label>
-              ))}
-            </div>
-          </div>
+          <FilterSection title="Playbook">
+            {['Microfinance v1', 'Consumer Lending', 'Regulatory Check'].map((p) => (
+              <CustomCheckbox
+                key={p}
+                label={p}
+                checked={!!playbookFilters[p]}
+                onChange={() => toggle(setPlaybookFilters, p)}
+              />
+            ))}
+          </FilterSection>
 
+          {/* Recent Runs */}
           <div>
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-white/40 mb-2">Recent Runs</h3>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/45 block mb-2.5">
+              Recent Runs
+            </span>
             <div className="space-y-2">
-              {['Run #001 — Loan Doc', 'Run #002 — Policy Rev', 'Run #003 — Disclosure'].map((run, i) => (
+              {RUNS.map((run) => (
                 <div
-                  key={run}
-                  className={`rounded-md border px-3 py-2 text-sm cursor-pointer transition-colors ${
-                    i === 0
-                      ? 'border-indigo-500/30 bg-indigo-500/[0.06] text-white/90'
-                      : 'border-white/[0.06] bg-white/[0.02] text-white/50 hover:border-white/[0.12] hover:text-white/70'
-                  }`}
+                  key={run.label}
+                  className={`
+                    group rounded-lg border px-3 py-2.5 cursor-pointer transition-all duration-150
+                    ${run.active
+                      ? 'border-indigo-500/40 bg-indigo-500/[0.08] border-l-[3px] border-l-indigo-500'
+                      : 'border-white/[0.06] bg-white/[0.02] hover:border-white/[0.14] hover:bg-white/[0.04]'
+                    }
+                  `}
                 >
-                  {run}
+                  <div className="flex items-center gap-2.5">
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT_COLOR[run.status] ?? 'bg-white/30'} ${run.status === 'running' ? 'animate-pulse' : ''}`} />
+                    <span className={`text-[13px] font-medium truncate ${run.active ? 'text-white/90' : 'text-white/55 group-hover:text-white/75'}`}>
+                      {run.label}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
