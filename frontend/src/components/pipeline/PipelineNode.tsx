@@ -7,7 +7,9 @@ interface PipelineNodeData {
   label: string;
   status: NodeStatus;
   icon: string;
-  /** Set by parent when this node just transitioned (from usePipelineState diff) */
+  overlayMode?: 'none' | 'history' | 'cost';
+  historyCount?: number;
+  costData?: { time: string; cost: string } | null;
   justTransitioned?: boolean;
   [key: string]: unknown;
 }
@@ -80,7 +82,7 @@ function NodeIcon({ icon }: { icon: string }) {
 }
 
 export const PipelineNode = memo(function PipelineNode({ data }: { data: PipelineNodeData }) {
-  const { label, status, icon } = data;
+  const { label, status, icon, overlayMode, historyCount, costData } = data;
   const config = STATUS_CONFIG[status];
   const prevStatusRef = useRef<NodeStatus>(status);
   const [transitioning, setTransitioning] = useState(false);
@@ -90,13 +92,11 @@ export const PipelineNode = memo(function PipelineNode({ data }: { data: Pipelin
     if (prevStatusRef.current !== status) {
       setTransitioning(true);
       prevStatusRef.current = status;
-      // Clear transition flag after animation completes
       const timer = setTimeout(() => setTransitioning(false), 400);
       return () => clearTimeout(timer);
     }
   }, [status]);
 
-  // Show check icon briefly when completing, alert icon when failing
   const displayIcon = transitioning && status === 'complete' ? 'check'
     : transitioning && (status === 'failed' || status === 'escalated') ? 'alert'
     : icon;
@@ -115,16 +115,35 @@ export const PipelineNode = memo(function PipelineNode({ data }: { data: Pipelin
     >
       <Handle type="target" position={Position.Top} className="!w-2 !h-2 !bg-white/20 !border-white/30" />
 
+      {/* History mode badge */}
+      {overlayMode === 'history' && historyCount !== undefined && historyCount > 0 && (
+        <div className="absolute -top-2 -right-2 flex items-center justify-center w-5 h-5 rounded-full bg-indigo-500 text-white text-[9px] font-bold shadow-sm shadow-indigo-500/30 z-10">
+          {historyCount}
+        </div>
+      )}
+
       <div className={`transition-colors duration-300 ${config.text}`}>
         <NodeIcon icon={displayIcon} />
       </div>
 
       <span className="text-sm font-medium text-white/90">{label}</span>
 
-      <div className="flex items-center gap-1.5">
-        <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${config.dot}`} />
-        <span className={`text-xs transition-colors duration-300 ${config.text}`}>{config.label}</span>
-      </div>
+      {/* Default: status line */}
+      {overlayMode !== 'cost' && (
+        <div className="flex items-center gap-1.5">
+          <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${config.dot}`} />
+          <span className={`text-xs transition-colors duration-300 ${config.text}`}>{config.label}</span>
+        </div>
+      )}
+
+      {/* Cost mode: time/cost inline */}
+      {overlayMode === 'cost' && costData && (
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-[10px] font-mono text-violet-300/80">{costData.time}</span>
+          <span className="text-white/15">·</span>
+          <span className="text-[10px] font-mono text-emerald-300/80">{costData.cost}</span>
+        </div>
+      )}
 
       <Handle type="source" position={Position.Bottom} className="!w-2 !h-2 !bg-white/20 !border-white/30" />
     </div>

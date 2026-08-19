@@ -1,12 +1,13 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   ReactFlow,
   Background,
   Controls,
   BackgroundVariant,
   Position,
+  applyNodeChanges,
 } from '@xyflow/react';
-import type { Node, Edge } from '@xyflow/react';
+import type { Node, Edge, NodeChange } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
 import { PipelineNode } from '@/components/pipeline/PipelineNode';
@@ -15,6 +16,7 @@ import { AddNode } from '@/components/pipeline/AddNode';
 import { SmoothEdge } from '@/components/pipeline/SmoothEdge';
 import { NodeDetailPanel } from '@/components/pipeline/NodeDetailPanel';
 import { usePipelineState } from '@/hooks/usePipelineState';
+import { applyDagreLayout } from '@/utils/pipelineLayout';
 import type { NodeStatus, EdgeDecision } from '@/types/pipeline';
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -107,7 +109,15 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
 
 // ─── TopBar ──────────────────────────────────────────────────────────────────
 
-function TopBar({ runStatus, connectionLost }: { runStatus: string; connectionLost: boolean }) {
+type OverlayMode = 'none' | 'history' | 'cost';
+
+function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, totalCost }: {
+  runStatus: string;
+  connectionLost: boolean;
+  overlayMode: OverlayMode;
+  onOverlayChange: (mode: OverlayMode) => void;
+  totalCost: string | null;
+}) {
   return (
     <div className="flex items-center justify-between h-12 px-4 border-b border-white/[0.06] bg-[#0c0f1a]/80 backdrop-blur-sm">
       <div className="flex items-center gap-3">
@@ -135,175 +145,140 @@ function TopBar({ runStatus, connectionLost }: { runStatus: string; connectionLo
             {runStatus}
           </span>
         )}
+        {/* Cost mode total */}
+        {overlayMode === 'cost' && totalCost && (
+          <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-2.5 py-0.5 text-[10px] font-mono text-violet-300 border border-violet-500/25">
+            Σ {totalCost}
+          </span>
+        )}
       </div>
-      <button className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 transition-colors shadow-sm shadow-indigo-600/20">
-        Start pipeline
-      </button>
+
+      <div className="flex items-center gap-2">
+        {/* Overlay mode toggle */}
+        <div className="flex rounded-md border border-white/[0.08] overflow-hidden">
+          {(['none', 'history', 'cost'] as OverlayMode[]).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => onOverlayChange(mode)}
+              className={`px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors ${
+                overlayMode === mode
+                  ? 'bg-indigo-500/20 text-indigo-300'
+                  : 'text-white/40 hover:text-white/60 hover:bg-white/[0.03]'
+              }`}
+            >
+              {mode === 'none' ? 'Status' : mode}
+            </button>
+          ))}
+        </div>
+
+        <button className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 transition-colors shadow-sm shadow-indigo-600/20">
+          Start pipeline
+        </button>
+      </div>
     </div>
   );
 }
 
 // ─── Node/Edge builders ──────────────────────────────────────────────────────
 
-const NODE_ICONS: Record<string, string> = {
-  ingest: 'download',
-  extract_text: 'document',
-  classify_document: 'brain',
-  chunk: 'document',
-  embed: 'document',
-  extract_claims: 'search',
-  match_rules: 'search',
-  match_rules_against_sources: 'search',
-  merge_findings: 'merge',
-  score_confidence: 'brain',
-  route_to_queue: 'shield',
-  human_review: 'shield',
-  finalize: 'play',
-};
+/**
+ * Build the pipeline graph with proper DAG structure.
+ * Parallel branches (match_rules / match_rules_against_sources) are expressed
+ * via edges, and dagre lays them out side-by-side automatically.
+ *
+ * Graph topology:
+ *   start → ingest → extract_text → classify_document → chunk → embed → extract_claims
+ *     extract_claims → match_rules
+ *     extract_claims → match_rules_against_sources
+ *   match_rules → merge_findings
+ *   match_rules_against_sources → merge_findings
+ *   merge_findings → score_confidence → route_to_queue → human_review → finalize
+ */
 
-const NODE_LABELS: Record<string, string> = {
-  ingest: 'Ingest',
-  extract_text: 'Extract Text',
-  classify_document: 'Classify',
-  chunk: 'Chunk',
-  embed: 'Embed',
-  extract_claims: 'Extract Claims',
-  match_rules: 'Match Rules',
-  match_rules_against_sources: 'Match Sources',
-  merge_findings: 'Merge Findings',
-  score_confidence: 'Score',
-  route_to_queue: 'Route to Queue',
-  human_review: 'Human Review',
-  finalize: 'Finalize',
-};
+interface NodeDef {
+  id: string;
+  label: string;
+  icon: string;
+  type: 'stageNode' | 'mergeNode' | 'addNode';
+}
 
-// Layout: 3 ingest nodes fan out, then linear sequence
+const GRAPH_NODES: NodeDef[] = [
+  { id: 'start', label: 'Start', icon: 'play', type: 'stageNode' },
+  { id: 'ingest', label: 'Ingest', icon: 'download', type: 'stageNode' },
+  { id: 'extract_text', label: 'Extract Text', icon: 'document', type: 'stageNode' },
+  { id: 'classify_document', label: 'Classify', icon: 'brain', type: 'stageNode' },
+  { id: 'chunk', label: 'Chunk', icon: 'document', type: 'stageNode' },
+  { id: 'embed', label: 'Embed', icon: 'document', type: 'stageNode' },
+  { id: 'extract_claims', label: 'Extract Claims', icon: 'search', type: 'stageNode' },
+  // Parallel branch
+  { id: 'match_rules', label: 'Match Rules', icon: 'search', type: 'stageNode' },
+  { id: 'match_rules_against_sources', label: 'Match Sources', icon: 'search', type: 'stageNode' },
+  // Convergence
+  { id: 'merge_findings', label: 'Merge Findings', icon: 'merge', type: 'mergeNode' },
+  { id: 'score_confidence', label: 'Score', icon: 'brain', type: 'stageNode' },
+  { id: 'route_to_queue', label: 'Route to Queue', icon: 'shield', type: 'stageNode' },
+  { id: 'human_review', label: 'Human Review', icon: 'shield', type: 'stageNode' },
+  { id: 'finalize', label: 'Finalize', icon: 'play', type: 'stageNode' },
+];
+
+/** Edges defining the DAG structure (source → target) */
+const GRAPH_EDGES: Array<[string, string]> = [
+  ['start', 'ingest'],
+  ['ingest', 'extract_text'],
+  ['extract_text', 'classify_document'],
+  ['classify_document', 'chunk'],
+  ['chunk', 'embed'],
+  ['embed', 'extract_claims'],
+  // Parallel fan-out from extract_claims
+  ['extract_claims', 'match_rules'],
+  ['extract_claims', 'match_rules_against_sources'],
+  // Converge into merge
+  ['match_rules', 'merge_findings'],
+  ['match_rules_against_sources', 'merge_findings'],
+  // Continue linear
+  ['merge_findings', 'score_confidence'],
+  ['score_confidence', 'route_to_queue'],
+  ['route_to_queue', 'human_review'],
+  ['human_review', 'finalize'],
+];
+
 function buildNodes(nodeStatuses: Record<string, NodeStatus>): Node[] {
-  const nodes: Node[] = [];
+  return GRAPH_NODES.map((def) => {
+    const status: NodeStatus =
+      def.id === 'start'
+        ? (nodeStatuses['ingest'] === 'complete' || nodeStatuses['ingest'] === 'processing')
+          ? 'complete'
+          : 'ready'
+        : (nodeStatuses[def.id] ?? 'ready');
 
-  // Start trigger node
-  nodes.push({
-    id: 'start',
-    type: 'stageNode',
-    position: { x: 400, y: 0 },
-    data: { label: 'Start', status: (nodeStatuses['ingest'] === 'complete' || nodeStatuses['ingest'] === 'processing') ? 'complete' : 'ready' as NodeStatus, icon: 'play' },
-    sourcePosition: Position.Bottom,
-    targetPosition: Position.Top,
-  });
-
-  // Ingest (single node now — the real pipeline has one ingest)
-  nodes.push({
-    id: 'ingest',
-    type: 'stageNode',
-    position: { x: 400, y: 110 },
-    data: { label: 'Ingest', status: nodeStatuses['ingest'] ?? 'ready', icon: 'download' },
-    sourcePosition: Position.Bottom,
-    targetPosition: Position.Top,
-  });
-
-  // Sequential nodes after ingest
-  const sequentialNodes: string[] = [
-    'extract_text', 'classify_document', 'chunk', 'embed',
-    'extract_claims', 'match_rules', 'match_rules_against_sources',
-    'merge_findings', 'score_confidence', 'route_to_queue',
-    'human_review', 'finalize',
-  ];
-
-  let y = 220;
-
-  for (const nodeName of sequentialNodes) {
-    // Add "+" affordance node between stages (every 3 nodes for key transition points)
-    const isTransitionPoint = ['extract_claims', 'route_to_queue', 'finalize'].includes(nodeName);
-    if (isTransitionPoint) {
-      nodes.push({
-        id: `add-before-${nodeName}`,
-        type: 'addNode',
-        position: { x: 400, y },
-        data: { label: '+', status: 'ready' as NodeStatus, icon: '' },
-        sourcePosition: Position.Bottom,
-        targetPosition: Position.Top,
-      });
-      y += 70;
-    }
-
-    nodes.push({
-      id: nodeName,
-      type: nodeName === 'merge_findings' ? 'mergeNode' : 'stageNode',
-      position: { x: 400, y },
-      data: {
-        label: NODE_LABELS[nodeName] ?? nodeName,
-        status: nodeStatuses[nodeName] ?? 'ready',
-        icon: NODE_ICONS[nodeName] ?? 'document',
-      },
+    return {
+      id: def.id,
+      type: def.type,
+      // Position will be overwritten by dagre layout — placeholder
+      position: { x: 0, y: 0 },
+      data: { label: def.label, status, icon: def.icon },
+      draggable: true,
       sourcePosition: Position.Bottom,
       targetPosition: Position.Top,
-    });
-
-    y += 100;
-  }
-
-  return nodes;
+    };
+  });
 }
 
 function buildEdges(
   nodeStatuses: Record<string, NodeStatus>,
   edgeDecisions: Record<string, EdgeDecision>
 ): Edge[] {
-  const edges: Edge[] = [];
-
-  // Start → ingest
-  edges.push({
-    id: 'e-start-ingest',
-    source: 'start',
-    target: 'ingest',
-    type: 'smoothEdge',
-    data: { sourceStatus: nodeStatuses['ingest'] === 'complete' ? 'complete' : 'ready' },
-  });
-
-  // Sequential edges
-  const allNodes = [
-    'ingest', 'extract_text', 'classify_document', 'chunk', 'embed',
-    'extract_claims', 'match_rules', 'match_rules_against_sources',
-    'merge_findings', 'score_confidence', 'route_to_queue',
-    'human_review', 'finalize',
-  ];
-
-  for (let i = 0; i < allNodes.length - 1; i++) {
-    const src = allNodes[i];
-    const tgt = allNodes[i + 1];
+  const edges: Edge[] = GRAPH_EDGES.map(([src, tgt]) => {
     const edgeId = `e-${src}-${tgt}`;
-
-    // Check if there's a routing decision for this edge
     const decision = edgeDecisions[edgeId] ?? undefined;
-
-    // Handle "+" add nodes between stages
-    const isTransitionTarget = ['extract_claims', 'route_to_queue', 'finalize'].includes(tgt);
-    if (isTransitionTarget) {
-      const addId = `add-before-${tgt}`;
-      edges.push({
-        id: `e-${src}-${addId}`,
-        source: src,
-        target: addId,
-        type: 'smoothEdge',
-        data: { sourceStatus: nodeStatuses[src], decision },
-      });
-      edges.push({
-        id: `e-${addId}-${tgt}`,
-        source: addId,
-        target: tgt,
-        type: 'smoothEdge',
-        data: { sourceStatus: nodeStatuses[src] },
-      });
-    } else {
-      edges.push({
-        id: edgeId,
-        source: src,
-        target: tgt,
-        type: 'smoothEdge',
-        data: { sourceStatus: nodeStatuses[src], decision },
-      });
-    }
-  }
+    return {
+      id: edgeId,
+      source: src,
+      target: tgt,
+      type: 'smoothEdge',
+      data: { sourceStatus: nodeStatuses[src] ?? 'ready', decision },
+    };
+  });
 
   // Add escalation edges (visual — from failed/escalated nodes to route_to_queue)
   for (const [nodeName, status] of Object.entries(nodeStatuses)) {
@@ -321,12 +296,51 @@ function buildEdges(
   return edges;
 }
 
+// ─── Mock overlay data ───────────────────────────────────────────────────────
+
+// History mode: how many times each node has been touched by incremental updates
+const MOCK_HISTORY_COUNTS: Record<string, number> = {
+  ingest: 3,
+  extract_text: 2,
+  classify_document: 1,
+  chunk: 2,
+  embed: 1,
+  extract_claims: 4,
+  match_rules: 2,
+  match_rules_against_sources: 1,
+  merge_findings: 3,
+  score_confidence: 1,
+  route_to_queue: 2,
+  human_review: 0,
+  finalize: 0,
+};
+
+// Cost mode: per-node time and cost
+const MOCK_COST_DATA: Record<string, { time: string; cost: string }> = {
+  ingest: { time: '1.2s', cost: '$0.00' },
+  extract_text: { time: '3.4s', cost: '$0.02' },
+  classify_document: { time: '0.8s', cost: '$0.01' },
+  chunk: { time: '0.3s', cost: '$0.00' },
+  embed: { time: '2.1s', cost: '$0.04' },
+  extract_claims: { time: '4.7s', cost: '$0.08' },
+  match_rules: { time: '1.9s', cost: '$0.03' },
+  match_rules_against_sources: { time: '2.3s', cost: '$0.05' },
+  merge_findings: { time: '0.5s', cost: '$0.00' },
+  score_confidence: { time: '1.1s', cost: '$0.02' },
+  route_to_queue: { time: '0.2s', cost: '$0.00' },
+  human_review: { time: '—', cost: '—' },
+  finalize: { time: '—', cost: '—' },
+};
+
+const MOCK_TOTAL_COST = '$0.25 · 18.5s';
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export function PipelineCanvas() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeLabel, setSelectedNodeLabel] = useState('');
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>('none');
 
   // Poll real state (or mock when VITE_MOCK_API=true)
   const { nodeStatuses, edgeDecisions, recentTransitions, runState, connectionLost } = usePipelineState('run-001');
@@ -347,22 +361,73 @@ export function PipelineCanvas() {
     [recentTransitions]
   );
 
-  const nodes = useMemo(() => {
-    const built = buildNodes(nodeStatuses);
-    // Annotate nodes that just transitioned
-    return built.map((node) => ({
+  // Build edges from graph structure (pure derivation)
+  const edges = useMemo(() => buildEdges(nodeStatuses, edgeDecisions), [nodeStatuses, edgeDecisions]);
+
+  // --- Node state management ---
+  // We maintain nodes in useState so drag changes persist.
+  // On mount (and when topology changes), we compute layout positions.
+  // On data-only changes (status, overlay), we update data without resetting positions.
+
+  const [nodes, setNodes] = useState<Node[]>(() => {
+    const raw = buildNodes(nodeStatuses);
+    const laid = applyDagreLayout(raw, edges, { nodesep: 100, ranksep: 120 });
+    return laid.map((node) => ({
       ...node,
       data: {
         ...node.data,
-        justTransitioned: transitionedNodeIds.has(node.id),
+        overlayMode,
+        historyCount: MOCK_HISTORY_COUNTS[node.id] ?? 0,
+        costData: MOCK_COST_DATA[node.id] ?? null,
       },
     }));
-  }, [nodeStatuses, transitionedNodeIds]);
-  const edges = useMemo(() => buildEdges(nodeStatuses, edgeDecisions), [nodeStatuses, edgeDecisions]);
+  });
+
+  // Track whether this is the initial mount
+  const isInitialMount = useRef(true);
+
+  // Update node data when pipeline status or overlay mode changes.
+  // Preserves user-dragged positions by only updating `data`, not `position`.
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    setNodes((currentNodes) =>
+      currentNodes.map((node) => {
+        const status: NodeStatus =
+          node.id === 'start'
+            ? (nodeStatuses['ingest'] === 'complete' || nodeStatuses['ingest'] === 'processing')
+              ? 'complete'
+              : 'ready'
+            : (nodeStatuses[node.id] ?? 'ready');
+
+        const nodeDef = GRAPH_NODES.find((n) => n.id === node.id);
+        return {
+          ...node,
+          data: {
+            label: nodeDef?.label ?? node.id,
+            status,
+            icon: nodeDef?.icon ?? 'document',
+            justTransitioned: transitionedNodeIds.has(node.id),
+            overlayMode,
+            historyCount: MOCK_HISTORY_COUNTS[node.id] ?? 0,
+            costData: MOCK_COST_DATA[node.id] ?? null,
+          },
+        };
+      })
+    );
+  }, [nodeStatuses, transitionedNodeIds, overlayMode]);
+
+  // Handle node changes (drag, selection, etc.) — this is what makes
+  // dragging work in React Flow's controlled mode.
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    setNodes((nds) => applyNodeChanges(changes, nds));
+  }, []);
 
   const handleNodeClick = useCallback((_: unknown, node: Node) => {
-    // Don't open panel for add nodes or start node
-    if (node.id.startsWith('add-') || node.id === 'start') return;
+    if (node.id === 'start') return;
     setSelectedNodeId(node.id);
     setSelectedNodeLabel((node.data as { label?: string }).label ?? node.id);
   }, []);
@@ -376,7 +441,13 @@ export function PipelineCanvas() {
       <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <TopBar runStatus={runState?.run_status ?? 'running'} connectionLost={connectionLost} />
+        <TopBar
+          runStatus={runState?.run_status ?? 'running'}
+          connectionLost={connectionLost}
+          overlayMode={overlayMode}
+          onOverlayChange={setOverlayMode}
+          totalCost={overlayMode === 'cost' ? MOCK_TOTAL_COST : null}
+        />
 
         <div className="flex-1 relative">
           <ReactFlow
@@ -384,8 +455,7 @@ export function PipelineCanvas() {
             edges={edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
-            nodesDraggable={false}
-            edgesFocusable={false}
+            onNodesChange={onNodesChange}
             onNodeClick={handleNodeClick}
             fitView
             fitViewOptions={{ padding: 0.2 }}
@@ -404,7 +474,7 @@ export function PipelineCanvas() {
             />
           </ReactFlow>
 
-          {/* Detail panel overlay */}
+          {/* Detail panel overlay — NOT inside ReactFlow so it persists across mode changes */}
           <NodeDetailPanel
             nodeId={selectedNodeId}
             nodeLabel={selectedNodeLabel}

@@ -9,4 +9,8 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    // Disable module preload polyfill which can use eval in some environments
+    modulePreload: { polyfill: false },
+  },
 })
