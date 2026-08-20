@@ -25,6 +25,7 @@ from src.pipeline.resume import (
     ResumeStore,
     resume_run,
 )
+from src.pipeline.services import CostStore, get_run_cost as get_run_cost_service
 from src.pipeline.state import create_initial_state
 
 
@@ -109,6 +110,29 @@ class RunHistoryResponse(BaseModel):
     total: int
 
 
+class StageCostResponse(BaseModel):
+    """Cost/time breakdown for a single pipeline stage."""
+
+    stage: str
+    step_order: int
+    status: str
+    duration_ms: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+
+
+class RunCostResponse(BaseModel):
+    """Aggregated cost breakdown for a pipeline run."""
+
+    run_id: str
+    total_duration_ms: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cost_usd: float = 0.0
+    stages: list[StageCostResponse] = []
+
+
 # --- Database store protocol ---
 
 
@@ -186,6 +210,25 @@ def get_history_store() -> Any:
             detail="History store not configured",
         )
     return _history_store
+
+
+_cost_store: Optional[Any] = None
+
+
+def set_cost_store(store: Any) -> None:
+    """Set the cost store implementation (for testing/configuration)."""
+    global _cost_store
+    _cost_store = store
+
+
+def get_cost_store() -> Any:
+    """Get the current cost store implementation."""
+    if _cost_store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Cost store not configured",
+        )
+    return _cost_store
 
 
 # --- Router ---
@@ -430,4 +473,44 @@ def get_run_state(
         error_type=state.get("error_type"),
         error_detail=state.get("error_detail"),
         run_status=run_status,
+    )
+
+
+@router.get("/{run_id}/cost", response_model=RunCostResponse)
+def get_run_cost_endpoint(
+    run_id: str,
+) -> RunCostResponse:
+    """Get per-stage cost and time breakdown for a pipeline run.
+
+    Returns total aggregated cost/time plus a per-stage breakdown with
+    duration, token counts, and estimated USD cost for each node.
+
+    Nodes that do not call an LLM will have token/cost fields as null
+    but will still report duration_ms.
+    """
+    result = get_run_cost_service(run_id=run_id)
+
+    if result.error:
+        raise HTTPException(status_code=503, detail=result.error)
+
+    stages = [
+        StageCostResponse(
+            stage=s.stage,
+            step_order=s.step_order,
+            status=s.status,
+            duration_ms=s.duration_ms,
+            input_tokens=s.input_tokens,
+            output_tokens=s.output_tokens,
+            cost_usd=s.cost_usd,
+        )
+        for s in result.stages
+    ]
+
+    return RunCostResponse(
+        run_id=result.run_id,
+        total_duration_ms=result.total_duration_ms,
+        total_input_tokens=result.total_input_tokens,
+        total_output_tokens=result.total_output_tokens,
+        total_cost_usd=result.total_cost_usd,
+        stages=stages,
     )

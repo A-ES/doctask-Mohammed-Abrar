@@ -1,126 +1,149 @@
-# supa_doccs
+# Agentic Document Intelligence — Microfinance Compliance
 
-Document intelligence pipeline for synthetic microfinance and consumer loan compliance analysis.
+An end-to-end pipeline that ingests a "pile" of financial documents, extracts structured facts with source provenance, evaluates compliance rules, and surfaces findings for human approval — with full checkpointed resumability and concurrent-run isolation.
 
-## Domain & Formats
+---
 
-**Domain:** Microfinance and consumer loan agreements (Financial Compliance & Credit Auditing)
-**Formats:** PDF, DOCX, plain text
+## Quick Start (one command)
 
-## Architecture
+Prerequisites: **Docker**, **Docker Compose v2**, and [**uv**](https://docs.astral.sh/uv/getting-started/installation/) (Python package manager).
 
-- **Pipeline:** LangGraph StateGraph with 13 nodes across 3 stages (Understand → Examine → Stay-Alive)
-- **Classification:** `classify_document` node routes to type-specific extractors (loan, modification, repayment)
-- **Extraction:** Regex-based extractors produce `ExtractedFact` with `SourceSpan` provenance pointers
-- **Rules Checking:** YAML-driven compliance rules evaluated via LLM (default) or structured checks; parallel `match_rules` + `match_rules_against_sources` fan-out
-- **Persistence:** PostgreSQL 16 + pgvector; all run state checkpointed as JSONB
-- **Resumability:** Per-node checkpoints with advisory locks; killed runs resume from last completed step
-- **Routing:** Conditional edges with retry (bounded), skip, and escalate logic
-- **Human gate:** Item-by-item approve/reject via interrupt node + polling service
-- **Concurrency:** Per-run_id advisory locks + OCC version columns
-- **Audit:** Append-only `audit_events` table with trigger protection
+```bash
+make demo
+```
+
+This single command:
+
+1. Builds and starts PostgreSQL 16 + pgvector and the FastAPI service (`docker compose up`)
+2. Applies all 8 database migrations (schema, tables, triggers, indexes)
+3. Generates a deterministic 5-document synthetic pile and seeds it into the database
+
+After it completes:
+
+| Service    | URL                              |
+|------------|----------------------------------|
+| API        | http://localhost:8000/health      |
+| PostgreSQL | `localhost:5432` (postgres/postgres/docdb) |
+
+To bring everything down: `make down` (or `make clean` to also wipe the volume).
+
+---
+
+## Supported Document Formats
+
+| Format | MIME Type | Notes |
+|--------|-----------|-------|
+| **PDF** | `application/pdf` | Parsed via text extraction layer; scanned PDFs not yet supported |
+| **DOCX** | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` | Standard Office Open XML |
+| **Plain text** | `text/plain` | Direct ingestion, no conversion step |
+
+The pipeline determines format at the `ingest` node via MIME detection. Adding support for a new format requires only a new text-extraction adapter in `src/pipeline/nodes/extract_text.py` — no graph changes.
+
+---
+
+## Domain
+
+**Microfinance and consumer loan compliance** (Financial Compliance & Credit Auditing).
+
+The system is purpose-built for document piles containing:
+
+- Loan agreements (principal, rate, tenure, fees, penal clauses)
+- Modification agreements (rate reductions, moratoriums, term changes)
+- Repayment statements (tabular or narrative payment histories)
+
+Compliance rules live in YAML playbooks under `rules/`. The shipped playbook (`microfinance_v1`) checks:
+
+| Rule | Description |
+|------|-------------|
+| MF-001 | APR must not exceed 36% |
+| MF-002 | Processing fee must be disclosed |
+| MF-003 | Interest rate must match latest modification |
+| MF-004 | Late payment penalty must not exceed 5% of outstanding |
+
+A second evaluation with different documents works without code changes — drop new files in the same declared formats (PDF, DOCX, or plain text) within the microfinance/consumer-loan domain, and the existing pipeline + rules apply as-is. To add domain-specific rules, edit or add YAML in `rules/` (no Python changes required).
+
+---
+
+## Architecture Decisions — What We Cut and Why
+
+| Decision | What was cut | Why |
+|----------|-------------|-----|
+| **No LangGraph runtime** | The `langgraph` package is declared as a dependency but the pipeline runs on a custom `ResumableExecutor` with the same checkpoint/resume semantics | LangGraph's runtime was not yet stable enough to warrant coupling; our executor gives identical guarantees (tested via kill-and-resume property tests) while keeping the graph topology portable to LangGraph when ready |
+| **No real LLM calls** | Extraction and rule evaluation use protocol-based interfaces with mock implementations in tests | Avoids API-key gating for evaluators; production wiring is a config switch, not a code change |
+| **No scanned-PDF OCR** | Only text-layer PDFs are supported | OCR adds Tesseract/cloud-vision dependencies and latency; the compliance domain primarily uses digitally-generated loan docs |
+| **No React UI in Docker** | Frontend is a separate Vite dev server, not containerized | Keeps the backend image small and CI fast; the frontend is stateless and talks to the API over localhost |
+| **No cloud deployment** | Docker Compose for local only | Scope is demo + evaluation; production would add Terraform/CDK, secrets management, and multi-region Postgres — all out of scope for this prototype |
+| **Regex extraction as default** | LLM-based extraction is identified as necessary (see DECISIONS.md) but not yet wired as default | The regex extractors are deterministic and fully tested; LLM default is the next planned change |
+| **No embedding service** | The `embed` node is a no-op stub | pgvector schema is ready; real embeddings require an API key and add cost per document |
+| **No authentication** | API is unauthenticated | Prototype scope; production would add JWT/OAuth middleware |
+
+---
 
 ## Project Structure
 
 ```
-├── rules/                   # YAML compliance playbooks (no .py edits to add rules)
-├── migrations/              # Sequential SQL migrations (001–007)
-├── docs/
-│   └── invariants.md        # System invariants (resumability, concurrency, approval)
+├── scripts/
+│   └── seed_demo.py           # Generates + inserts the synthetic demo pile
+├── rules/                     # YAML compliance playbooks (no code edits to add rules)
+├── migrations/                # Sequential SQL migrations (001–008)
 ├── src/
-│   ├── models/              # SQLAlchemy declarative models (10 tables)
+│   ├── models/                # SQLAlchemy models (10 tables)
 │   ├── pipeline/
-│   │   ├── nodes/           # 13 async pipeline nodes (incl. classify_document, match_rules_against_sources, merge_findings)
-│   │   ├── extractors/      # Type-specific extractors (loan, modification, repayment) + registry
-│   │   ├── state.py         # PipelineState TypedDict + factory
-│   │   ├── config.py        # Config loader with validation
-│   │   ├── routing.py       # Conditional edge routing functions
-│   │   ├── playbook.py      # Pydantic playbook schema, loader, rule partitioner
-│   │   ├── evaluators.py    # RuleEvaluator protocol, LLM + structured implementations
-│   │   ├── findings.py      # CitedSpan, EvaluationResult, Finding dataclasses
-│   │   ├── source_linker.py # SourceLinker + persist_fact
-│   │   ├── serialization.py # JSONB round-trip (bytes ↔ base64)
-│   │   ├── checkpoint.py    # Per-node checkpoint persistence
-│   │   ├── resume.py        # Kill-and-resume logic
-│   │   ├── executor.py      # ResumableExecutor — checkpointed sequential runner
-│   │   ├── stores.py        # ThreadSafeCheckpointStore (concurrent execution)
-│   │   ├── approval.py      # Approval gate service + in-memory store
-│   │   ├── approval_api.py  # REST endpoints for programmatic approve/reject
-│   │   ├── services.py      # Shared service layer (called by both REST + MCP)
-│   │   ├── graph.py         # StateGraph assembly (13 nodes + fan-out)
-│   │   ├── api.py           # FastAPI endpoints (POST /runs, /runs/{id}/resume)
-│   │   └── polling.py       # Human review polling service
-│   ├── mcp_server.py        # MCP server (6 tools, stdio transport)
-│   └── main.py              # FastAPI entrypoint
+│   │   ├── nodes/             # 13 async pipeline nodes
+│   │   ├── extractors/        # Type-specific extractors (loan, modification, repayment)
+│   │   ├── graph.py           # StateGraph assembly
+│   │   ├── executor.py        # ResumableExecutor (checkpoint-based runner)
+│   │   ├── approval.py        # Approval gate + in-memory store
+│   │   ├── services.py        # Shared service layer (REST + MCP)
+│   │   └── ...                # Config, routing, playbook, evaluators, etc.
+│   ├── mcp_server.py          # MCP server (6 tools, stdio transport)
+│   └── main.py                # FastAPI entrypoint
 ├── tests/
-│   ├── test_schema/         # Schema property tests (14 properties)
-│   ├── pipeline/            # Pipeline tests (870+ tests, 25 PBT properties)
-│   ├── microfinance/        # Microfinance extraction property tests (20 properties) + E2E provenance
-│   ├── synthetic/           # Synthetic document generator + tests
-│   ├── test_resumability.py # Kill-and-resume invariant tests
-│   ├── test_concurrency.py  # Concurrent run isolation tests
-│   ├── test_approval_gate.py # Approval gate endpoint + independence tests
-│   └── test_mcp_integration.py # Full pile end-to-end via MCP tools only
-├── docker-compose.yml       # PostgreSQL 16 + pgvector
+│   ├── synthetic/             # Deterministic document generators
+│   ├── pipeline/              # 870+ tests (25 property-based)
+│   ├── test_resumability.py   # Kill-and-resume invariant tests
+│   ├── test_concurrency.py    # Run isolation tests
+│   └── test_mcp_integration.py # End-to-end via MCP tools
+├── frontend/                  # React + Vite review interface
+├── docker-compose.yml         # PostgreSQL 16 + pgvector, API service
+├── Dockerfile                 # Python 3.11-slim, uv-based
+├── Makefile                   # make demo = up + migrate + seed
 └── pyproject.toml
 ```
 
-## Status
+---
 
-- [x] Core PostgreSQL schema (7 migrations, 10 tables, triggers, indexes)
-- [x] SQLAlchemy models with OCC
-- [x] Schema property tests (14 properties, all passing)
-- [x] **LangGraph pipeline implementation** (11 nodes, routing, checkpoint, resume)
-- [x] **Pipeline property tests** (16 correctness properties via Hypothesis)
-- [x] **Microfinance ingestion pipeline** (classify → extract → source-link, 20 properties, 807 tests)
-- [x] **FastAPI endpoints** (run creation, resume)
-- [x] **Polling service** (decision completeness checks, reminders)
-- [x] **Checkpointed resumability** (executor with kill-and-resume, tested)
-- [x] **Concurrent run isolation** (per-run_id locking, thread-safe store, tested)
-- [x] **Approval gate** (programmatic REST approve/reject, queue independence, tested)
-- [x] **Rules checking stage** (YAML playbooks, LLM + structured evaluators, 58 tests, 9 PBT properties)
-- [x] **MCP server** (6 tools mirroring REST, shared service layer, full integration test)
-- [ ] LangGraph runtime integration (requires `langgraph` package)
-- [ ] React UI + cost tracking
+## Running Tests
+
+```bash
+# All tests (no database needed for pipeline + invariant tests)
+make test
+
+# Schema tests (requires running Postgres — run 'make up' first)
+make test-schema
+```
+
+---
 
 ## MCP Server
 
-The system is also exposed as an MCP (Model Context Protocol) server. Both the REST API and MCP tools call the same shared service functions — no separate logic paths.
-
-### Tools
-
-| Tool | Equivalent REST | Purpose |
-|------|----------------|---------|
-| `start_run` | `POST /runs` | Start a new pipeline run (upload a pile) |
-| `get_run_status` | `POST /runs/{id}/resume` | Query run status and next node |
-| `list_pending_approvals` | `GET /approval/runs/{id}/queue` | List approval queue items |
-| `decide_approval` | `POST /approval/items/{id}/decide` | Approve or reject an item |
-| `get_deliverable` | — | Get current deliverable with section hashes |
-| `get_change_history` | `GET /runs/{id}/history` | Get audit trail for a run |
-
-### Running the MCP server
+The system is also available as an MCP server (stdio transport) exposing the same operations as the REST API through 6 tools: `start_run`, `get_run_status`, `list_pending_approvals`, `decide_approval`, `get_deliverable`, `get_change_history`.
 
 ```bash
-python -m src.mcp_server
+uv run python -m src.mcp_server
 ```
 
-The server uses stdio transport and can be configured in any MCP-compatible client.
+---
 
-## Running
+## Makefile Targets
 
-```bash
-# Start PostgreSQL
-docker compose up -d postgres
-
-# Apply migrations
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/docdb python migrations/run_migrations.py
-
-# Run all tests
-python -m pytest tests/ -v
-
-# Run pipeline tests only
-python -m pytest tests/pipeline/ -v
-
-# Run MCP integration test
-python -m pytest tests/test_mcp_integration.py -v
-```
+| Target | Description |
+|--------|-------------|
+| `make demo` | **The one command** — up + migrate + seed |
+| `make up` | Start containers |
+| `make down` | Stop containers |
+| `make clean` | Stop + wipe volumes |
+| `make migrate` | Apply SQL migrations |
+| `make seed` | Insert synthetic demo pile |
+| `make test` | Run test suite |
+| `make frontend` | Start Vite dev server |

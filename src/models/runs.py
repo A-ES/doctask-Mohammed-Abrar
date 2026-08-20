@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Integer, String, Text, text
+from sqlalchemy import ForeignKey, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -85,6 +85,14 @@ class RunStep(Base):
     )
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("1")
+    )
+
+    # Cost tracking columns (nullable — populated by executor instrumentation)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 6), nullable=True
     )
 
     # Relationships

@@ -59,6 +59,7 @@ class InMemoryCheckpointStore:
         output_state: dict[str, Any],
         status: str,
         ended_at: Any,
+        **kwargs: Any,
     ) -> None:
         key = (run_id, step_order)
         if key not in self.steps:

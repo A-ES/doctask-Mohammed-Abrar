@@ -53,6 +53,7 @@ class InMemoryCheckpointStore:
         output_state: dict[str, Any],
         status: str,
         ended_at: datetime,
+        **kwargs: Any,
     ) -> None:
         self.checkpoints.append({
             "run_id": run_id,
@@ -86,6 +87,7 @@ class FailingCheckpointStore:
         output_state: dict[str, Any],
         status: str,
         ended_at: datetime,
+        **kwargs: Any,
     ) -> None:
         raise RuntimeError(self.error_message)
 

@@ -62,6 +62,17 @@ class SkippedNodeEntry(TypedDict):
     reason: str
 
 
+class NodeMetrics(TypedDict, total=False):
+    """Token usage metrics reported by a node after execution.
+
+    Nodes that call an LLM populate input_tokens and output_tokens.
+    Non-LLM nodes may leave this empty or omit it entirely.
+    """
+
+    input_tokens: int
+    output_tokens: int
+
+
 class PipelineConfig(TypedDict):
     """Configuration parameters frozen at run creation time."""
 
@@ -140,6 +151,9 @@ class PipelineState(TypedDict):
     queue_buckets: QueueBuckets
     decisions: list[Decision]
 
+    # Per-node cost/time metrics (populated by each node, consumed by executor)
+    _last_node_metrics: Optional[NodeMetrics]
+
 
 # --- Factory Function ---
 
@@ -204,4 +218,6 @@ def create_initial_state(
             auto_reject=[],
         ),
         decisions=[],
+        # Per-node metrics (reset by executor before each node)
+        _last_node_metrics=None,
     )

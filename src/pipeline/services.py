@@ -8,8 +8,8 @@ no separate logic paths exist.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional, Protocol
 
 from src.pipeline.approval import (
     ApprovalService,
@@ -29,6 +29,23 @@ from src.pipeline.resume import (
     resume_run,
 )
 from src.pipeline.state import create_initial_state
+
+
+# ---------------------------------------------------------------------------
+# Store protocols
+# ---------------------------------------------------------------------------
+
+
+class CostStore(Protocol):
+    """Protocol for querying per-step cost data."""
+
+    def get_step_costs(self, run_id: str) -> list[dict[str, Any]]:
+        """Return cost data for all steps of a run.
+
+        Each dict contains: step_name, step_order, status, duration_ms,
+        input_tokens, output_tokens, cost_usd.
+        """
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +98,32 @@ class HistoryResult:
     total: int
 
 
+@dataclass
+class StageCost:
+    """Cost/time breakdown for a single pipeline stage (node)."""
+
+    stage: str
+    step_order: int
+    status: str
+    duration_ms: Optional[int] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
+
+
+@dataclass
+class RunCostResult:
+    """Aggregated cost breakdown for a complete pipeline run."""
+
+    run_id: str
+    total_duration_ms: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cost_usd: float = 0.0
+    stages: list[StageCost] = field(default_factory=list)
+    error: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Store registry (dependency injection for both surfaces)
 # ---------------------------------------------------------------------------
@@ -98,6 +141,7 @@ class ServiceRegistry:
         self.history_store: Optional[Any] = None
         self.approval_service: Optional[ApprovalService] = None
         self.deliverable: Optional[Deliverable] = None
+        self.cost_store: Optional[CostStore] = None
 
     def configure(
         self,
@@ -106,6 +150,7 @@ class ServiceRegistry:
         history_store: Any = None,
         approval_service: ApprovalService | None = None,
         deliverable: Deliverable | None = None,
+        cost_store: CostStore | None = None,
     ) -> None:
         if run_store is not None:
             self.run_store = run_store
@@ -117,6 +162,8 @@ class ServiceRegistry:
             self.approval_service = approval_service
         if deliverable is not None:
             self.deliverable = deliverable
+        if cost_store is not None:
+            self.cost_store = cost_store
 
 
 # Singleton registry
@@ -320,4 +367,61 @@ def get_change_history(run_id: str) -> HistoryResult:
         run_id=run_id,
         entries=entries_data,
         total=history.total,
+    )
+
+
+def get_run_cost(run_id: str) -> RunCostResult:
+    """Get per-stage cost and time breakdown for a pipeline run.
+
+    Queries all run_steps for the given run_id and aggregates cost data
+    into a total plus per-stage breakdown.
+    """
+    if not registry.cost_store:
+        return RunCostResult(run_id=run_id, error="Cost store not configured")
+
+    step_rows = registry.cost_store.get_step_costs(run_id)
+
+    if not step_rows:
+        return RunCostResult(run_id=run_id, stages=[])
+
+    stages: list[StageCost] = []
+    total_duration = 0
+    total_input = 0
+    total_output = 0
+    total_cost = 0.0
+
+    for row in step_rows:
+        duration = row.get("duration_ms")
+        inp_tokens = row.get("input_tokens")
+        out_tokens = row.get("output_tokens")
+        cost = row.get("cost_usd")
+
+        stages.append(
+            StageCost(
+                stage=row["step_name"],
+                step_order=row["step_order"],
+                status=row["status"],
+                duration_ms=duration,
+                input_tokens=inp_tokens,
+                output_tokens=out_tokens,
+                cost_usd=float(cost) if cost is not None else None,
+            )
+        )
+
+        if duration is not None:
+            total_duration += duration
+        if inp_tokens is not None:
+            total_input += inp_tokens
+        if out_tokens is not None:
+            total_output += out_tokens
+        if cost is not None:
+            total_cost += float(cost)
+
+    return RunCostResult(
+        run_id=run_id,
+        total_duration_ms=total_duration,
+        total_input_tokens=total_input,
+        total_output_tokens=total_output,
+        total_cost_usd=round(total_cost, 6),
+        stages=stages,
     )

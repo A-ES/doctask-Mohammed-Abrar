@@ -75,6 +75,10 @@ class ThreadSafeCheckpointStore:
         output_state: dict[str, Any],
         status: str,
         ended_at: Any,
+        duration_ms: Optional[int] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        cost_usd: Optional[float] = None,
     ) -> None:
         """Atomically update the run_steps row with state and status.
 
@@ -89,6 +93,10 @@ class ThreadSafeCheckpointStore:
             self.steps[key]["output_state"] = output_state
             self.steps[key]["status"] = status
             self.steps[key]["ended_at"] = ended_at
+            self.steps[key]["duration_ms"] = duration_ms
+            self.steps[key]["input_tokens"] = input_tokens
+            self.steps[key]["output_tokens"] = output_tokens
+            self.steps[key]["cost_usd"] = cost_usd
 
     # --- ExecutorStore protocol: resume reading ---
 

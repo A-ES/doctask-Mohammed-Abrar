@@ -16,11 +16,36 @@ node begins (modeling the dangerous window between transitions).
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Protocol
 
 from src.pipeline.serialization import deserialize_state, serialize_state
-from src.pipeline.state import PipelineState
+from src.pipeline.state import NodeMetrics, PipelineState
+
+
+# ---------------------------------------------------------------------------
+# Cost estimation helpers
+# ---------------------------------------------------------------------------
+
+# Approximate cost per token (USD) for common models.
+# These are deliberately conservative estimates — the executor uses them
+# only when a node reports token counts but not an explicit cost.
+_DEFAULT_INPUT_COST_PER_TOKEN = 0.000003  # ~$3 / 1M input tokens
+_DEFAULT_OUTPUT_COST_PER_TOKEN = 0.000015  # ~$15 / 1M output tokens
+
+
+def estimate_cost_usd(metrics: NodeMetrics) -> float:
+    """Estimate USD cost from token counts using default per-token rates.
+
+    Returns 0.0 if no token information is available.
+    """
+    input_tokens = metrics.get("input_tokens", 0) or 0
+    output_tokens = metrics.get("output_tokens", 0) or 0
+    return (
+        input_tokens * _DEFAULT_INPUT_COST_PER_TOKEN
+        + output_tokens * _DEFAULT_OUTPUT_COST_PER_TOKEN
+    )
 
 
 class CrashAfterNode(Exception):
@@ -51,8 +76,15 @@ class ExecutorStore(Protocol):
         output_state: dict[str, Any],
         status: str,
         ended_at: Any,
+        duration_ms: Optional[int] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        cost_usd: Optional[float] = None,
     ) -> None:
-        """Update the run_steps row with state, status, ended_at atomically."""
+        """Update the run_steps row with state, status, ended_at atomically.
+
+        Optional cost tracking fields are persisted when provided.
+        """
         ...
 
     def get_last_checkpoint(self, run_id: str) -> Optional[dict[str, Any]]:
@@ -163,10 +195,26 @@ class ResumableExecutor:
                 # Create step row (status='running') — marks intent
                 self.store.create_step(run_id, node_name, step_order)
 
-                # Execute the node
-                state = node_fn(state)
+                # Clear metrics from prior node so we can detect fresh writes
+                state["_last_node_metrics"] = None
 
-                # Write checkpoint atomically (status='completed')
+                # Execute the node with timing
+                t0 = time.perf_counter()
+                state = node_fn(state)
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+
+                # Extract token metrics if the node reported them
+                metrics: Optional[NodeMetrics] = state.get("_last_node_metrics")
+                input_tokens: Optional[int] = None
+                output_tokens: Optional[int] = None
+                cost: Optional[float] = None
+
+                if metrics:
+                    input_tokens = metrics.get("input_tokens")
+                    output_tokens = metrics.get("output_tokens")
+                    cost = estimate_cost_usd(metrics)
+
+                # Write checkpoint atomically (status='completed') with cost data
                 self.store.write_checkpoint(
                     run_id=run_id,
                     step_name=node_name,
@@ -174,6 +222,10 @@ class ResumableExecutor:
                     output_state=serialize_state(state),
                     status=state["node_status"],
                     ended_at=datetime.now(timezone.utc),
+                    duration_ms=elapsed_ms,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost,
                 )
 
                 # Test hook: simulate crash AFTER checkpoint is durable

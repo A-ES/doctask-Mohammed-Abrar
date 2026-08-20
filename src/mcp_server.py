@@ -27,6 +27,7 @@ from src.pipeline.services import (
     decide_approval_item,
     get_change_history,
     get_deliverable,
+    get_run_cost,
     get_run_status,
     list_pending_approvals,
     registry,
@@ -134,6 +135,20 @@ def get_deliverable_tool() -> str:
 def get_change_history_tool(run_id: str) -> str:
     """Get change history for a run."""
     result = get_change_history(run_id=run_id)
+    return json.dumps(asdict(result))
+
+
+@mcp.tool(
+    name="get_run_cost",
+    description=(
+        "Get per-stage cost and time breakdown for a pipeline run. "
+        "Returns total duration, token counts, and estimated USD cost, "
+        "plus a per-stage breakdown for each pipeline node."
+    ),
+)
+def get_run_cost_tool(run_id: str) -> str:
+    """Get cost and time breakdown for a run."""
+    result = get_run_cost(run_id=run_id)
     return json.dumps(asdict(result))
 
 

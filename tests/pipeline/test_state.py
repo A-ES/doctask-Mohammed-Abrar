@@ -116,6 +116,7 @@ class TestCreateInitialState:
             "source_findings",
             "queue_buckets",
             "decisions",
+            "_last_node_metrics",
         }
         assert set(state.keys()) == expected_keys
 

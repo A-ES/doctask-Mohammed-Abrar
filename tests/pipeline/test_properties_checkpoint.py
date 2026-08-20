@@ -58,6 +58,7 @@ class TrackingCheckpointStore:
         output_state: dict[str, Any],
         status: str,
         ended_at: datetime,
+        **kwargs: Any,
     ) -> None:
         self.checkpoints.append({
             "run_id": run_id,

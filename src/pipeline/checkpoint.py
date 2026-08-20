@@ -50,6 +50,7 @@ class CheckpointStore(Protocol):
         output_state: dict[str, Any],
         status: str,
         ended_at: datetime,
+        **kwargs: Any,
     ) -> None:
         """Update the run_steps row with serialized state, status, and ended_at.
 
@@ -63,6 +64,8 @@ class CheckpointStore(Protocol):
             output_state: Already-serialized state dictionary (JSONB-ready).
             status: Final status for the step ('completed' or 'skipped').
             ended_at: Timestamp when the step finished.
+            **kwargs: Optional cost tracking fields (duration_ms, input_tokens,
+                output_tokens, cost_usd).
 
         Raises:
             Exception: On database/store failure.
