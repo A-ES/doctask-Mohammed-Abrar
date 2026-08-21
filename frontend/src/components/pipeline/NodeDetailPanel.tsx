@@ -244,17 +244,239 @@ function ItemCard({ item, onDecision }: { item: QueueItem; onDecision: (id: stri
   );
 }
 
+// ─── Node Details Display ────────────────────────────────────────────────────
+
+function NodeDetailsSection({ details }: { details: any }) {
+  if (!details || details.status === 'running') return null;
+
+  const duration = details.duration_ms != null ? `${(details.duration_ms / 1000).toFixed(1)}s` : '—';
+  const tokens = (details.input_tokens || details.output_tokens)
+    ? `${details.input_tokens ?? 0} in / ${details.output_tokens ?? 0} out`
+    : null;
+  const cost = details.cost_usd != null ? `$${details.cost_usd.toFixed(4)}` : null;
+
+  return (
+    <div className="rounded-lg border border-white/[0.06] bg-[#141927]/60 overflow-hidden">
+      {/* Metrics bar */}
+      <div className="flex items-center gap-3 px-3 py-2 border-b border-white/[0.04] bg-[#0f1320]/40">
+        <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider border ${
+          details.status === 'completed' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
+          details.status === 'skipped' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
+          details.status === 'error' ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' :
+          'bg-white/10 text-white/50 border-white/20'
+        }`}>{details.status}</span>
+        <span className="text-[10px] text-white/40 font-mono">{duration}</span>
+        {tokens && <span className="text-[10px] text-white/30 font-mono">{tokens}</span>}
+        {cost && <span className="text-[10px] text-violet-300/70 font-mono">{cost}</span>}
+      </div>
+
+      {/* Node-specific content */}
+      <div className="p-3 space-y-2">
+        {/* Ingest */}
+        {details.mime_type && (
+          <DetailRow label="MIME Type" value={details.mime_type} />
+        )}
+        {details.file_size != null && (
+          <DetailRow label="File Size" value={`${(details.file_size / 1024).toFixed(1)} KB`} />
+        )}
+
+        {/* Extract Text */}
+        {details.text_length != null && (
+          <DetailRow label="Extracted Text" value={`${details.text_length.toLocaleString()} characters`} />
+        )}
+        {details.extracted_text_preview && (
+          <div className="mt-2 rounded-md bg-[#0a0d16] border border-white/[0.04] p-2 max-h-[200px] overflow-y-auto">
+            <pre className="text-[11px] text-white/50 whitespace-pre-wrap font-mono leading-relaxed">
+              {details.extracted_text_preview.slice(0, 500)}
+              {details.extracted_text_preview.length > 500 ? '...' : ''}
+            </pre>
+          </div>
+        )}
+
+        {/* Classify */}
+        {details.classification_label && (
+          <div className="space-y-1">
+            <DetailRow label="Classification" value={details.classification_label.replace(/_/g, ' ')} />
+            <DetailRow label="Confidence" value={`${((details.classification_confidence ?? 0) * 100).toFixed(0)}%`} />
+            {details.classification_scores && (
+              <div className="mt-1.5 space-y-1">
+                {Object.entries(details.classification_scores).map(([label, score]) => (
+                  <div key={label} className="flex items-center gap-2">
+                    <span className="text-[10px] text-white/30 w-32 truncate">{label.replace(/_/g, ' ')}</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-indigo-500/60"
+                        style={{ width: `${(score as number) * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] text-white/40 font-mono w-8 text-right">{((score as number) * 100).toFixed(0)}%</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Chunk */}
+        {details.chunk_count != null && (
+          <DetailRow label="Chunks" value={`${details.chunk_count} segments`} />
+        )}
+        {details.chunks_preview && details.chunks_preview.length > 0 && (
+          <div className="space-y-1 mt-1">
+            {details.chunks_preview.map((c: any) => (
+              <div key={c.index} className="rounded bg-[#0a0d16] border border-white/[0.04] px-2 py-1.5">
+                <span className="text-[9px] text-white/30 font-mono">chunk {c.index} · {c.length} chars</span>
+                <p className="text-[10px] text-white/40 mt-0.5 truncate">{c.text_preview}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Claims */}
+        {details.claim_count != null && (
+          <DetailRow label="Claims Extracted" value={`${details.claim_count}`} />
+        )}
+        {details.claims && details.claims.length > 0 && (
+          <div className="space-y-1.5 mt-1">
+            {details.claims.slice(0, 10).map((claim: any) => (
+              <div key={claim.claim_id} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-2">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className="text-[9px] font-mono text-indigo-300/60">{claim.claim_id}</span>
+                  <span className={`text-[9px] px-1 rounded ${
+                    claim.confidence >= 0.8 ? 'bg-emerald-500/20 text-emerald-300' :
+                    claim.confidence >= 0.5 ? 'bg-amber-500/20 text-amber-300' :
+                    'bg-rose-500/20 text-rose-300'
+                  }`}>{(claim.confidence * 100).toFixed(0)}%</span>
+                </div>
+                <p className="text-[11px] text-white/60 leading-snug">{claim.claim_text}</p>
+              </div>
+            ))}
+            {details.claims.length > 10 && (
+              <p className="text-[10px] text-white/30 text-center">+{details.claims.length - 10} more claims</p>
+            )}
+          </div>
+        )}
+
+        {/* Verdicts */}
+        {details.verdicts && details.verdicts.length > 0 && (
+          <div className="space-y-1.5 mt-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Verdicts</span>
+            {details.verdicts.slice(0, 10).map((v: any, i: number) => (
+              <div key={i} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-mono text-white/40">{v.claim_id}</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                    v.verdict === 'compliant' ? 'bg-emerald-500/20 text-emerald-300' :
+                    v.verdict === 'non_compliant' ? 'bg-rose-500/20 text-rose-300' :
+                    'bg-amber-500/20 text-amber-300'
+                  }`}>{v.verdict}</span>
+                  {v.rule_id && <span className="text-[9px] text-white/30">{v.rule_id}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Findings */}
+        {details.findings && details.findings.length > 0 && (
+          <div className="space-y-1.5 mt-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+              Findings ({details.finding_count ?? details.findings.length})
+            </span>
+            {details.findings.slice(0, 8).map((f: any, i: number) => (
+              <div key={i} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-2">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  {f.severity && (
+                    <span className={`text-[9px] px-1 rounded font-bold uppercase ${
+                      f.severity === 'high' ? 'bg-rose-500/20 text-rose-300' :
+                      f.severity === 'medium' ? 'bg-amber-500/20 text-amber-300' :
+                      'bg-white/10 text-white/50'
+                    }`}>{f.severity}</span>
+                  )}
+                  {f.finding_type && <span className="text-[9px] text-white/30">{f.finding_type}</span>}
+                  {f.rule_id && <span className="text-[9px] text-indigo-300/60">{f.rule_id}</span>}
+                </div>
+                <p className="text-[11px] text-white/60">{f.description || f.reason || '—'}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Queue buckets */}
+        {details.queue_buckets && (
+          <div className="space-y-1 mt-1">
+            <DetailRow label="Auto-approve" value={`${details.auto_approve_count ?? 0} claims`} />
+            <DetailRow label="Escalated" value={`${details.escalate_count ?? 0} claims`} />
+            <DetailRow label="Auto-reject" value={`${details.auto_reject_count ?? 0} claims`} />
+          </div>
+        )}
+
+        {/* Decisions */}
+        {details.decision_count != null && (
+          <DetailRow label="Decisions" value={`${details.decision_count}`} />
+        )}
+
+        {/* Finalize */}
+        {details.final_status && (
+          <div className="space-y-1">
+            <DetailRow label="Total Claims" value={`${details.total_claims ?? 0}`} />
+            <DetailRow label="Total Findings" value={`${details.total_findings ?? 0}`} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-[10px] uppercase tracking-wider text-white/30">{label}</span>
+      <span className="text-[11px] text-white/70 font-medium">{value}</span>
+    </div>
+  );
+}
+
 // ─── Main Panel ──────────────────────────────────────────────────────────────
 
 interface NodeDetailPanelProps {
   nodeId: string | null;
   nodeLabel: string;
   onClose: () => void;
+  runId?: string | null;
 }
 
-export function NodeDetailPanel({ nodeId, nodeLabel, onClose }: NodeDetailPanelProps) {
+export function NodeDetailPanel({ nodeId, nodeLabel, onClose, runId }: NodeDetailPanelProps) {
   const [items, setItems] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [nodeDetails, setNodeDetails] = useState<any>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+
+  // Fetch node execution details from the backend
+  useEffect(() => {
+    if (!nodeId || !runId) {
+      setNodeDetails(null);
+      return;
+    }
+    setDetailsLoading(true);
+
+    async function fetchDetails() {
+      try {
+        const res = await fetch(`${BASE_URL}/runs/${runId}/node/${nodeId}/details`);
+        if (res.ok) {
+          const data = await res.json();
+          setNodeDetails(data);
+        } else {
+          setNodeDetails(null);
+        }
+      } catch {
+        setNodeDetails(null);
+      }
+      setDetailsLoading(false);
+    }
+
+    fetchDetails();
+  }, [nodeId, runId]);
 
   // Fetch items for this node
   useEffect(() => {
@@ -266,11 +488,18 @@ export function NodeDetailPanel({ nodeId, nodeLabel, onClose }: NodeDetailPanelP
         await new Promise((r) => setTimeout(r, 200));
         setItems(MOCK_NODE_ITEMS[nodeId!] ?? []);
       } else {
+        if (!runId) {
+          setItems([]);
+          setLoading(false);
+          return;
+        }
         try {
-          const res = await fetch(`${BASE_URL}/approval/runs/run-001/queue?node=${nodeId}`);
+          const res = await fetch(`${BASE_URL}/approval/runs/${runId}/queue?node=${nodeId}`);
           if (res.ok) {
             const data = await res.json();
             setItems(data.items ?? []);
+          } else {
+            setItems([]);
           }
         } catch {
           setItems([]);
@@ -280,7 +509,7 @@ export function NodeDetailPanel({ nodeId, nodeLabel, onClose }: NodeDetailPanelP
     }
 
     fetchItems();
-  }, [nodeId]);
+  }, [nodeId, runId]);
 
   // Handle decision — only updates the single item
   const handleDecision = useCallback(async (itemId: string, decision: 'approved' | 'rejected') => {
@@ -350,6 +579,22 @@ export function NodeDetailPanel({ nodeId, nodeLabel, onClose }: NodeDetailPanelP
 
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {/* Node execution details */}
+              {nodeDetails && !detailsLoading && (
+                <NodeDetailsSection details={nodeDetails} />
+              )}
+              {detailsLoading && (
+                <div className="rounded-lg border border-white/[0.06] bg-[#141927]/60 p-3">
+                  <div className="flex items-center gap-2 text-xs text-white/40">
+                    <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <circle cx="12" cy="12" r="10" opacity={0.25} />
+                      <path d="M4 12a8 8 0 018-8" opacity={0.75} />
+                    </svg>
+                    Loading node details...
+                  </div>
+                </div>
+              )}
+
               {loading && (
                 <div className="flex items-center justify-center py-12">
                   <svg className="w-5 h-5 text-indigo-400 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>

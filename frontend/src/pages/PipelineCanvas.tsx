@@ -15,8 +15,11 @@ import { MergeNode } from '@/components/pipeline/MergeNode';
 import { AddNode } from '@/components/pipeline/AddNode';
 import { SmoothEdge } from '@/components/pipeline/SmoothEdge';
 import { NodeDetailPanel } from '@/components/pipeline/NodeDetailPanel';
+import { ReportPanel } from '@/components/pipeline/ReportPanel';
 import { usePipelineState } from '@/hooks/usePipelineState';
 import { applyDagreLayout } from '@/utils/pipelineLayout';
+import { uploadDocument, startPipeline, fetchPipelineRuns } from '@/services/pipelineApi';
+import type { RunListItem } from '@/services/pipelineApi';
 import type { NodeStatus, EdgeDecision } from '@/types/pipeline';
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -216,19 +219,29 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
 
 type OverlayMode = 'none' | 'history' | 'cost';
 
-function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, totalCost }: {
+function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, totalCost, onStartPipeline, isUploading, activeRunId, activeFilename }: {
   runStatus: string;
   connectionLost: boolean;
   overlayMode: OverlayMode;
   onOverlayChange: (mode: OverlayMode) => void;
   totalCost: string | null;
+  onStartPipeline: () => void;
+  isUploading: boolean;
+  activeRunId: string | null;
+  activeFilename: string | null;
 }) {
   return (
     <div className="flex items-center justify-between h-12 px-4 border-b border-white/[0.06] bg-[#0c0f1a]/80 backdrop-blur-sm">
       <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-white/90">Run #001</span>
-        <span className="text-white/20">·</span>
-        <span className="text-sm text-white/40">Loan Agreement Analysis</span>
+        <span className="text-sm font-medium text-white/90">
+          {activeRunId ? `Run ${activeRunId.slice(0, 8)}` : 'No active run'}
+        </span>
+        {activeFilename && (
+          <>
+            <span className="text-white/20">·</span>
+            <span className="text-sm text-white/40 truncate max-w-[200px]">{activeFilename}</span>
+          </>
+        )}
         {connectionLost && (
           <span className="flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-300 border border-amber-500/30">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
@@ -276,8 +289,16 @@ function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, total
           ))}
         </div>
 
-        <button className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 transition-colors shadow-sm shadow-indigo-600/20">
-          Start pipeline
+        <button
+          onClick={onStartPipeline}
+          disabled={isUploading || runStatus === 'running'}
+          className={`rounded-md px-4 py-1.5 text-sm font-medium text-white transition-colors shadow-sm ${
+            isUploading || runStatus === 'running'
+              ? 'bg-indigo-600/50 cursor-not-allowed'
+              : 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/20'
+          }`}
+        >
+          {isUploading ? 'Uploading...' : runStatus === 'running' ? 'Running...' : 'Start pipeline'}
         </button>
       </div>
     </div>
@@ -447,8 +468,85 @@ export function PipelineCanvas() {
   const [selectedNodeLabel, setSelectedNodeLabel] = useState('');
   const [overlayMode, setOverlayMode] = useState<OverlayMode>('none');
 
-  // Poll real state (or mock when VITE_MOCK_API=true)
-  const { nodeStatuses, edgeDecisions, recentTransitions, runState, connectionLost } = usePipelineState('run-001');
+  // Upload and run state
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeFilename, setActiveFilename] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [_runs, setRuns] = useState<RunListItem[]>([]);
+  const [_showReport, setShowReport] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Poll real state via SSE/polling
+  const { nodeStatuses, edgeDecisions, recentTransitions, runState, connectionLost } = usePipelineState(activeRunId);
+
+  // Show report when pipeline completes
+  useEffect(() => {
+    if (runState?.run_status === 'completed' || runState?.run_status === 'failed') {
+      // Small delay so user sees the last node turn green
+      const timer = setTimeout(() => setShowReport(true), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [runState?.run_status]);
+
+  // Load existing runs on mount
+  useEffect(() => {
+    fetchPipelineRuns().then((fetchedRuns) => {
+      setRuns(fetchedRuns);
+      // Auto-select the latest running or most recent run
+      const running = fetchedRuns.find((r) => r.status === 'running');
+      if (running) {
+        setActiveRunId(running.id);
+        setActiveFilename(running.filename);
+      } else if (fetchedRuns.length > 0) {
+        setActiveRunId(fetchedRuns[0].id);
+        setActiveFilename(fetchedRuns[0].filename);
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Handle "Start pipeline" click — opens file picker
+  const handleStartPipeline = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  // Handle file selection — upload then start pipeline
+  const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    try {
+      // 1. Upload the file
+      const uploadResult = await uploadDocument(file);
+
+      // 2. Start the pipeline
+      const startResult = await startPipeline(
+        uploadResult.document_id,
+        uploadResult.document_version_id,
+      );
+
+      // 3. Switch to tracking this run
+      setActiveRunId(startResult.run_id);
+      setActiveFilename(uploadResult.filename);
+
+      // Reset node statuses by updating run
+      setRuns((prev) => [{
+        id: startResult.run_id,
+        status: 'running',
+        started_at: new Date().toISOString(),
+        document_id: uploadResult.document_id,
+        filename: uploadResult.filename,
+      }, ...prev]);
+
+    } catch (err) {
+      console.error('Pipeline start failed:', err);
+      alert(`Failed to start pipeline: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsUploading(false);
+      // Reset file input
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, []);
 
   const nodeTypes = useMemo(() => ({
     stageNode: PipelineNode,
@@ -547,11 +645,24 @@ export function PipelineCanvas() {
 
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar
-          runStatus={runState?.run_status ?? 'running'}
+          runStatus={runState?.run_status ?? ''}
           connectionLost={connectionLost}
           overlayMode={overlayMode}
           onOverlayChange={setOverlayMode}
           totalCost={overlayMode === 'cost' ? MOCK_TOTAL_COST : null}
+          onStartPipeline={handleStartPipeline}
+          isUploading={isUploading}
+          activeRunId={activeRunId}
+          activeFilename={activeFilename}
+        />
+
+        {/* Hidden file input for upload */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.docx,.txt,.text"
+          className="hidden"
+          onChange={handleFileSelected}
         />
 
         <div className="flex-1 relative">
@@ -584,9 +695,17 @@ export function PipelineCanvas() {
             nodeId={selectedNodeId}
             nodeLabel={selectedNodeLabel}
             onClose={handleClosePanel}
+            runId={activeRunId}
           />
         </div>
       </div>
+
+      {/* Report panel — appears when pipeline completes */}
+      <ReportPanel
+        runId={activeRunId}
+        runStatus={runState?.run_status ?? null}
+        onClose={() => setShowReport(false)}
+      />
     </div>
   );
 }
