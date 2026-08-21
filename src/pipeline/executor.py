@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Protocol
 
+from src.pipeline.cancel import is_cancelled
 from src.pipeline.serialization import deserialize_state, serialize_state
 from src.pipeline.state import NodeMetrics, PipelineState
 
@@ -192,6 +193,11 @@ class ResumableExecutor:
             for step_order, (node_name, node_fn) in enumerate(
                 self.nodes[start_index:], start=start_index + 1
             ):
+                # Cooperative cancellation check between nodes
+                if is_cancelled(run_id):
+                    state["node_status"] = "cancelled"
+                    return state
+
                 # Create step row (status='running') — marks intent
                 self.store.create_step(run_id, node_name, step_order)
 

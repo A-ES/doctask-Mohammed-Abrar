@@ -10,6 +10,11 @@ dependencies = [
     "pgvector",
     "sqlalchemy",
     "mcp",
+    "openai",
+    "python-multipart",
+    "python-dotenv",
+    "sse-starlette",
+    "pdfplumber",
 ]
 
 [dependency-groups]
@@ -20,6 +25,9 @@ dev = [
     "httpx",
     "anyio[trio]",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [build-system]
 requires = ["hatchling"]

@@ -16,6 +16,7 @@ from typing import Any, Optional, Protocol
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from src.pipeline.cancel import request_cancel
 from src.pipeline.config import load_config
 from src.pipeline.history import HistoryStore, RunHistory, get_run_history
 from src.pipeline.resume import (
@@ -131,6 +132,14 @@ class RunCostResponse(BaseModel):
     total_output_tokens: int = 0
     total_cost_usd: float = 0.0
     stages: list[StageCostResponse] = []
+
+
+class CancelRunResponse(BaseModel):
+    """Response for a cancelled pipeline run."""
+
+    run_id: str
+    status: str
+    message: str
 
 
 # --- Database store protocol ---
@@ -513,4 +522,32 @@ def get_run_cost_endpoint(
         total_output_tokens=result.total_output_tokens,
         total_cost_usd=result.total_cost_usd,
         stages=stages,
+    )
+
+
+@router.post("/{run_id}/cancel", response_model=CancelRunResponse)
+def cancel_run_endpoint(
+    run_id: str,
+    store: Any = Depends(get_run_store),
+) -> CancelRunResponse:
+    """Cancel a running pipeline.
+
+    Sets a cooperative cancellation flag. The executor checks this flag
+    between node transitions and stops cleanly. All completed checkpoints
+    and audit events are preserved — nothing is deleted.
+
+    The run can be resumed later via POST /runs/{run_id}/resume.
+    """
+    if not store.run_exists(run_id):
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    request_cancel(run_id)
+
+    return CancelRunResponse(
+        run_id=run_id,
+        status="cancelling",
+        message=(
+            "Cancellation requested. The run will stop after the current "
+            "node completes. All checkpoints are preserved."
+        ),
     )

@@ -25,3 +25,6 @@ secrets/
 
 # uv artefacts (uv.lock is intentionally kept)
 .uv/
+
+# Uploaded documents
+uploads/

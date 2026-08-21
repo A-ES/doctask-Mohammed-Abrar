@@ -22,6 +22,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from src.pipeline.cancel import request_cancel
 from src.pipeline.services import (
     create_run,
     decide_approval_item,
@@ -150,6 +151,28 @@ def get_run_cost_tool(run_id: str) -> str:
     """Get cost and time breakdown for a run."""
     result = get_run_cost(run_id=run_id)
     return json.dumps(asdict(result))
+
+
+@mcp.tool(
+    name="cancel_run",
+    description=(
+        "Cancel a running pipeline. Sets a cooperative cancellation flag "
+        "so the executor stops after the current node finishes. All "
+        "completed checkpoints and audit events are preserved. "
+        "The run can be resumed later via the resume tool or endpoint."
+    ),
+)
+def cancel_run_tool(run_id: str) -> str:
+    """Cancel a pipeline run cooperatively."""
+    request_cancel(run_id)
+    return json.dumps({
+        "run_id": run_id,
+        "status": "cancelling",
+        "message": (
+            "Cancellation requested. The run will stop after the current "
+            "node completes. All checkpoints are preserved."
+        ),
+    })
 
 
 # ---------------------------------------------------------------------------

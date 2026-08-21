@@ -14,6 +14,7 @@ Requires:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sys
 import uuid
@@ -72,7 +73,7 @@ def main() -> None:
 
                 cur.execute(
                     """
-                    INSERT INTO documents (id, filename, mime_type, created_at, metadata)
+                    INSERT INTO documents (id, filename, mime_type, ingested_at, metadata)
                     VALUES (%s, %s, %s, %s, %s)
                     """,
                     (
@@ -86,51 +87,33 @@ def main() -> None:
 
                 cur.execute(
                     """
-                    INSERT INTO document_versions (id, document_id, version_number, content_hash, size_bytes, created_at)
+                    INSERT INTO document_versions (id, document_id, version_number, content_hash, storage_ref, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     """,
-                    (version_id, doc_id, 1, content_hash, len(doc.content), now),
+                    (version_id, doc_id, 1, content_hash, f"local://{doc.filename}", now),
                 )
 
                 document_ids.append(doc_id)
                 print(f"  + {doc.filename} ({doc.document_type}, {doc.format})")
 
-            # Create a pipeline run referencing the first document
+            # Create a pipeline run
             cur.execute(
                 """
-                INSERT INTO runs (id, document_id, status, config_snapshot, created_at, version)
+                INSERT INTO runs (id, status, config_snapshot, started_at, initiator, version)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (
                     run_id,
-                    document_ids[0],
                     "pending",
-                    f'{{"playbook_id": "microfinance_v1", "pile_document_ids": {document_ids}}}',
+                    json.dumps({"playbook_id": "microfinance_v1", "pile_document_ids": document_ids}),
                     now,
+                    "seed_demo",
                     1,
                 ),
             )
 
-            # Insert source_locations for ground truth (enables provenance demo)
-            for doc_idx, doc in enumerate(pile.documents):
-                for fact in doc.ground_truth_facts:
-                    cur.execute(
-                        """
-                        INSERT INTO source_locations (id, document_version_id, start_offset, end_offset, snippet)
-                        VALUES (%s, (
-                            SELECT dv.id FROM document_versions dv
-                            JOIN documents d ON d.id = dv.document_id
-                            WHERE d.id = %s LIMIT 1
-                        ), %s, %s, %s)
-                        """,
-                        (
-                            str(uuid.uuid4()),
-                            document_ids[doc_idx],
-                            fact.start_offset,
-                            fact.end_offset,
-                            fact.value[:200],
-                        ),
-                    )
+            # Note: source_locations require claim_id (FK to claims table),
+            # so ground-truth provenance is populated when the pipeline runs extraction.
 
         conn.commit()
         print(f"\nDone. Run ID: {run_id}")
