@@ -1,0 +1,199 @@
+import { useState, useEffect, useCallback } from 'react';
+import { fetchPiles, createPile, fetchPileDetail, uploadToPile } from '@/services/pipelineApi';
+import type { PileListItem, PileDetail } from '@/services/pipelineApi';
+import { FileDropZone } from './FileDropZone';
+
+interface PilesPanelProps {
+  selectedPileId: string | null;
+  onPileSelect: (pile: PileListItem) => void;
+  onDocumentsUploaded: () => void;
+}
+
+/**
+ * Piles section for the sidebar — list piles, create new pile,
+ * show documents in selected pile, and upload files into it.
+ */
+export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }: PilesPanelProps) {
+  const [piles, setPiles] = useState<PileListItem[]>([]);
+  const [pileDetail, setPileDetail] = useState<PileDetail | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [newPileName, setNewPileName] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Load piles list
+  const loadPiles = useCallback(async () => {
+    const result = await fetchPiles();
+    setPiles(result);
+  }, []);
+
+  useEffect(() => {
+    loadPiles();
+  }, [loadPiles]);
+
+  // Load pile detail when selection changes
+  useEffect(() => {
+    if (selectedPileId) {
+      fetchPileDetail(selectedPileId)
+        .then(setPileDetail)
+        .catch(() => setPileDetail(null));
+    } else {
+      setPileDetail(null);
+    }
+  }, [selectedPileId]);
+
+  const handleCreatePile = useCallback(async () => {
+    if (!newPileName.trim()) return;
+    try {
+      const created = await createPile(newPileName.trim());
+      setNewPileName('');
+      setIsCreating(false);
+      await loadPiles();
+      // Auto-select the newly created pile
+      onPileSelect({ id: created.id, name: created.name, status: 'active', created_at: '', document_count: 0 });
+    } catch (err) {
+      console.error('Failed to create pile:', err);
+    }
+  }, [newPileName, loadPiles, onPileSelect]);
+
+  const handleFilesSelected = useCallback(async (files: File[]) => {
+    if (!selectedPileId) return;
+    setIsUploading(true);
+    setUploadError(null);
+    try {
+      const result = await uploadToPile(selectedPileId, files);
+      if (result.errors.length > 0) {
+        setUploadError(result.errors.join(', '));
+      }
+      // Refresh pile detail and list
+      await loadPiles();
+      const detail = await fetchPileDetail(selectedPileId);
+      setPileDetail(detail);
+      onDocumentsUploaded();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setIsUploading(false);
+    }
+  }, [selectedPileId, loadPiles, onDocumentsUploaded]);
+
+  return (
+    <div className="space-y-3">
+      {/* Section header + New button */}
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/45">
+          Piles
+        </span>
+        <button
+          onClick={() => setIsCreating(!isCreating)}
+          className="text-[10px] font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
+        >
+          {isCreating ? 'Cancel' : '+ New'}
+        </button>
+      </div>
+
+      {/* Create pile inline form */}
+      {isCreating && (
+        <div className="flex gap-1.5">
+          <input
+            type="text"
+            value={newPileName}
+            onChange={(e) => setNewPileName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleCreatePile(); }}
+            placeholder="Pile name..."
+            className="flex-1 rounded-md border border-white/[0.1] bg-white/[0.03] px-2.5 py-1.5 text-[12px] text-white/80 placeholder-white/30 focus:border-indigo-500/50 focus:outline-none focus:ring-1 focus:ring-indigo-500/20"
+            autoFocus
+          />
+          <button
+            onClick={handleCreatePile}
+            disabled={!newPileName.trim()}
+            className="rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-40 hover:bg-indigo-500 transition-colors"
+          >
+            Create
+          </button>
+        </div>
+      )}
+
+      {/* Pile list */}
+      <div className="space-y-1">
+        {piles.length === 0 && (
+          <p className="text-[12px] text-white/30 italic">No piles yet</p>
+        )}
+        {piles.map((pile) => {
+          const isActive = pile.id === selectedPileId;
+          return (
+            <button
+              key={pile.id}
+              onClick={() => onPileSelect(pile)}
+              className={`
+                w-full text-left rounded-md px-2.5 py-2 transition-all duration-150
+                ${isActive
+                  ? 'bg-indigo-500/[0.12] border border-indigo-500/30'
+                  : 'border border-transparent hover:bg-white/[0.04] hover:border-white/[0.08]'
+                }
+              `}
+            >
+              <div className="flex items-center justify-between">
+                <span className={`text-[13px] font-medium truncate ${isActive ? 'text-white/90' : 'text-white/60'}`}>
+                  {pile.name}
+                </span>
+                <span className="text-[10px] text-white/30 tabular-nums flex-shrink-0 ml-2">
+                  {pile.document_count} doc{pile.document_count !== 1 ? 's' : ''}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Selected pile: document list + upload zone */}
+      {selectedPileId && pileDetail && (
+        <div className="space-y-2 pt-2 border-t border-white/[0.06]">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/45 block">
+            Documents in "{pileDetail.name}"
+          </span>
+
+          {pileDetail.documents.length === 0 ? (
+            <p className="text-[11px] text-white/30 italic">No documents yet — drop files below</p>
+          ) : (
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {pileDetail.documents.map((doc) => (
+                <div
+                  key={doc.document_id}
+                  className="flex items-center gap-2 rounded px-2 py-1.5 bg-white/[0.02]"
+                >
+                  <MimeIcon mime={doc.mime_type} />
+                  <span className="text-[12px] text-white/60 truncate flex-1">
+                    {doc.filename}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Drop zone */}
+          <FileDropZone
+            onFilesSelected={handleFilesSelected}
+            isUploading={isUploading}
+            disabled={false}
+          />
+
+          {uploadError && (
+            <p className="text-[11px] text-rose-400">{uploadError}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Tiny MIME type icon */
+function MimeIcon({ mime }: { mime: string }) {
+  const color = mime.includes('pdf') ? 'text-rose-400/70' :
+    mime.includes('word') ? 'text-blue-400/70' : 'text-white/40';
+  return (
+    <svg className={`w-3.5 h-3.5 flex-shrink-0 ${color}`} viewBox="0 0 16 16" fill="currentColor">
+      <path d="M4 1a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V5.414A2 2 0 0013.414 4L11 1.586A2 2 0 009.586 1H4zm5 1.5v2A1.5 1.5 0 0010.5 6H13v7a.5.5 0 01-.5.5h-9A.5.5 0 013 13V3a.5.5 0 01.5-.5H9z" />
+    </svg>
+  );
+}

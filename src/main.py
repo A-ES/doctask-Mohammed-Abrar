@@ -32,10 +32,12 @@ load_dotenv()
 
 from src.database import SessionLocal, engine
 from src.models.documents import Document, DocumentVersion
+from src.models.piles import Pile, PileDocument
 from src.models.runs import Run, RunStep
 from src.pipeline.approval import ApprovalService, InMemoryApprovalStore
 from src.pipeline.approval_api import router as approval_router, set_approval_service
 from src.pipeline.api import router as runs_router
+from src.pipeline.piles_api import router as piles_router
 from src.pipeline.upload_api import router as upload_router
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,7 @@ app.add_middleware(
 app.include_router(upload_router)
 app.include_router(approval_router)
 app.include_router(runs_router)
+app.include_router(piles_router)
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────
@@ -126,9 +129,15 @@ async def health() -> dict:
 
 
 class StartPipelineRequest(BaseModel):
-    """Request to start a pipeline run on an uploaded document."""
-    document_id: str = Field(..., min_length=1)
-    document_version_id: str = Field(..., min_length=1)
+    """Request to start a pipeline run.
+
+    Supply pile_id to run against all documents in a pile (preferred).
+    Supply document_id + document_version_id for legacy single-doc mode.
+    Both can be provided — pile_id is recorded on the run either way.
+    """
+    document_id: Optional[str] = None
+    document_version_id: Optional[str] = None
+    pile_id: Optional[str] = None
     config_overrides: Optional[dict] = None
 
 
@@ -145,6 +154,8 @@ class RunListItem(BaseModel):
     started_at: str
     document_id: Optional[str] = None
     filename: Optional[str] = None
+    pile_id: Optional[str] = None
+    pile_name: Optional[str] = None
 
 
 @app.post("/runs/start", response_model=StartPipelineResponse)
@@ -152,31 +163,93 @@ async def start_pipeline(
     request: StartPipelineRequest,
     background_tasks: BackgroundTasks,
 ) -> StartPipelineResponse:
-    """Start a new pipeline run on an uploaded document.
+    """Start a new pipeline run.
 
-    Creates the run record, then kicks off async pipeline execution
-    using the demo executor with real DeepSeek LLM calls.
+    Accepts pile_id (preferred) to run against all documents in the pile,
+    or document_id + document_version_id for legacy single-document mode.
+    When pile_id is provided without document fields, the first document
+    in the pile is used as the primary pipeline input. The full pile
+    document list is recorded in config_snapshot.pile_document_ids.
     """
-    # Verify document exists
     session = SessionLocal()
     try:
-        doc = session.execute(
-            select(Document).where(Document.id == uuid.UUID(request.document_id))
-        ).scalar_one_or_none()
-        if doc is None:
-            raise HTTPException(status_code=404, detail="Document not found")
+        pile_uuid = None
+        pile_document_ids: list[str] = []
 
-        version = session.execute(
-            select(DocumentVersion).where(
-                DocumentVersion.id == uuid.UUID(request.document_version_id)
+        # --- Resolve pile if provided ---
+        if request.pile_id:
+            pile = session.execute(
+                select(Pile).where(Pile.id == uuid.UUID(request.pile_id))
+            ).scalar_one_or_none()
+            if pile is None:
+                raise HTTPException(status_code=404, detail="Pile not found")
+            pile_uuid = pile.id
+
+            # Gather all documents in the pile (snapshot at run-start, invariant 12)
+            pile_docs = session.execute(
+                select(PileDocument)
+                .where(PileDocument.pile_id == pile.id)
+                .order_by(PileDocument.added_at)
+            ).scalars().all()
+            pile_document_ids = [str(pd.document_id) for pd in pile_docs]
+
+            if not pile_document_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Pile has no documents. Upload documents before starting a run.",
+                )
+
+        # --- Resolve primary document ---
+        if request.document_id and request.document_version_id:
+            # Explicit single-document mode (or pile + explicit primary doc)
+            doc = session.execute(
+                select(Document).where(Document.id == uuid.UUID(request.document_id))
+            ).scalar_one_or_none()
+            if doc is None:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            version = session.execute(
+                select(DocumentVersion).where(
+                    DocumentVersion.id == uuid.UUID(request.document_version_id)
+                )
+            ).scalar_one_or_none()
+            if version is None:
+                raise HTTPException(status_code=404, detail="Document version not found")
+
+            storage_path = version.storage_ref
+            mime_type = doc.mime_type
+            filename = doc.filename
+            primary_doc_id = request.document_id
+            primary_version_id = request.document_version_id
+
+        elif pile_document_ids:
+            # Pile-first mode: use first pile document as primary input
+            first_doc_id = pile_document_ids[0]
+            doc = session.execute(
+                select(Document).where(Document.id == uuid.UUID(first_doc_id))
+            ).scalar_one_or_none()
+            if doc is None:
+                raise HTTPException(status_code=500, detail="Pile document not found in DB")
+
+            version = session.execute(
+                select(DocumentVersion)
+                .where(DocumentVersion.document_id == doc.id)
+                .order_by(DocumentVersion.version_number.desc())
+            ).scalars().first()
+            if version is None:
+                raise HTTPException(status_code=500, detail="No version found for pile document")
+
+            storage_path = version.storage_ref
+            mime_type = doc.mime_type
+            filename = doc.filename
+            primary_doc_id = str(doc.id)
+            primary_version_id = str(version.id)
+
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Provide pile_id or both document_id and document_version_id.",
             )
-        ).scalar_one_or_none()
-        if version is None:
-            raise HTTPException(status_code=404, detail="Document version not found")
-
-        storage_path = version.storage_ref
-        mime_type = doc.mime_type
-        filename = doc.filename
 
         # Create run record
         run_id = str(uuid.uuid4())
@@ -184,12 +257,14 @@ async def start_pipeline(
             id=uuid.UUID(run_id),
             status="pending",
             config_snapshot={
-                "document_id": request.document_id,
-                "document_version_id": request.document_version_id,
+                "document_id": primary_doc_id,
+                "document_version_id": primary_version_id,
+                "pile_document_ids": pile_document_ids or [primary_doc_id],
                 **(request.config_overrides or {}),
             },
             initiator="api",
             version=1,
+            pile_id=pile_uuid,
         )
         session.add(run)
         session.commit()
@@ -205,8 +280,8 @@ async def start_pipeline(
     background_tasks.add_task(
         _execute_pipeline_background,
         run_id=run_id,
-        document_id=request.document_id,
-        document_version_id=request.document_version_id,
+        document_id=primary_doc_id,
+        document_version_id=primary_version_id,
         storage_path=storage_path,
         mime_type=mime_type,
         filename=filename,
@@ -285,12 +360,24 @@ async def list_runs() -> list[RunListItem]:
                 if doc:
                     filename = doc.filename
 
+            # Resolve pile name
+            pile_name = None
+            pile_id_str = str(run.pile_id) if run.pile_id else None
+            if run.pile_id:
+                pile = session.execute(
+                    select(Pile).where(Pile.id == run.pile_id)
+                ).scalar_one_or_none()
+                if pile:
+                    pile_name = pile.name
+
             results.append(RunListItem(
                 id=str(run.id),
                 status=run.status,
                 started_at=run.started_at.isoformat(),
                 document_id=doc_id,
                 filename=filename,
+                pile_id=pile_id_str,
+                pile_name=pile_name,
             ))
         return results
     finally:

@@ -23,6 +23,8 @@ export interface RunListItem {
   started_at: string;
   document_id: string | null;
   filename: string | null;
+  pile_id: string | null;
+  pile_name: string | null;
 }
 
 export interface NodeDetails {
@@ -178,5 +180,175 @@ export async function fetchRunCost(runId: string): Promise<RunCost> {
   if (!response.ok) {
     throw new Error(`Failed to fetch run cost: ${response.status}`);
   }
+  return response.json();
+}
+
+export interface HistoryEntry {
+  event_id: string;
+  timestamp: string;
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  actor_id: string;
+  source_document_id: string | null;
+  previous_state: Record<string, unknown> | null;
+  new_state: Record<string, unknown>;
+}
+
+export interface RunHistory {
+  run_id: string;
+  entries: HistoryEntry[];
+  total: number;
+}
+
+export interface ResumeRunResponse {
+  run_id: string;
+  status: string;
+  resumed_from: string | null;
+  next_node: string | null;
+}
+
+/**
+ * Get the full change history (audit trail) for a pipeline run.
+ */
+export async function fetchRunHistory(runId: string): Promise<RunHistory> {
+  const response = await fetch(`${BASE_URL}/runs/${runId}/history`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch run history: ${response.status}`);
+  }
+  return response.json();
+}
+
+/**
+ * Resume a paused/interrupted/cancelled pipeline run from its last checkpoint.
+ */
+export async function resumeRun(runId: string): Promise<ResumeRunResponse> {
+  const response = await fetch(`${BASE_URL}/runs/${runId}/resume`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Resume failed' }));
+    throw new Error(error.detail || `Resume failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+// ─── Piles API ───────────────────────────────────────────────────────────────
+
+export interface PileListItem {
+  id: string;
+  name: string;
+  status: string;
+  created_at: string;
+  document_count: number;
+}
+
+export interface PileDocumentItem {
+  document_id: string;
+  filename: string;
+  mime_type: string;
+  added_at: string;
+}
+
+export interface PileDetail {
+  id: string;
+  name: string;
+  status: string;
+  created_at: string;
+  documents: PileDocumentItem[];
+}
+
+export interface UploadToPileResponse {
+  pile_id: string;
+  uploaded: Array<{
+    document_id: string;
+    filename: string;
+    mime_type: string;
+    size_bytes: number;
+  }>;
+  errors: string[];
+}
+
+/**
+ * List all active piles.
+ */
+export async function fetchPiles(): Promise<PileListItem[]> {
+  const response = await fetch(`${BASE_URL}/piles`);
+  if (!response.ok) return [];
+  return response.json();
+}
+
+/**
+ * Create a new pile.
+ */
+export async function createPile(name: string): Promise<{ id: string; name: string }> {
+  const response = await fetch(`${BASE_URL}/piles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Failed to create pile' }));
+    throw new Error(error.detail || `Create pile failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+/**
+ * Get pile details including its documents.
+ */
+export async function fetchPileDetail(pileId: string): Promise<PileDetail> {
+  const response = await fetch(`${BASE_URL}/piles/${pileId}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch pile: ${response.status}`);
+  }
+  return response.json();
+}
+
+/**
+ * Upload one or more files into a pile.
+ */
+export async function uploadToPile(pileId: string, files: File[]): Promise<UploadToPileResponse> {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append('files', file);
+  }
+
+  const response = await fetch(`${BASE_URL}/piles/${pileId}/documents`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Upload failed' }));
+    throw new Error(error.detail || `Upload to pile failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Start a pipeline run against a pile (using its first document for now).
+ */
+export async function startPipelineWithPile(
+  documentId: string,
+  documentVersionId: string,
+  pileId: string,
+): Promise<StartPipelineResponse> {
+  const response = await fetch(`${BASE_URL}/runs/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      document_id: documentId,
+      document_version_id: documentVersionId,
+      pile_id: pileId,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Start failed' }));
+    throw new Error(error.detail || `Start failed: ${response.status}`);
+  }
+
   return response.json();
 }

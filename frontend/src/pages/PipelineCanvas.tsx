@@ -18,8 +18,12 @@ import { NodeDetailPanel } from '@/components/pipeline/NodeDetailPanel';
 import { ReportPanel } from '@/components/pipeline/ReportPanel';
 import { usePipelineState } from '@/hooks/usePipelineState';
 import { applyDagreLayout } from '@/utils/pipelineLayout';
-import { uploadDocument, startPipeline, fetchPipelineRuns } from '@/services/pipelineApi';
+import { uploadDocument, startPipeline, fetchPipelineRuns, fetchRunCost, fetchRunHistory, resumeRun } from '@/services/pipelineApi';
 import type { RunListItem } from '@/services/pipelineApi';
+import type { PileListItem } from '@/services/pipelineApi';
+import { fetchPileDetail, startPipelineWithPile } from '@/services/pipelineApi';
+import { ResumeButton } from '@/components/review/ResumeButton';
+import { PilesPanel } from '@/components/pipeline/PilesPanel';
 import type { NodeStatus, EdgeDecision } from '@/types/pipeline';
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -89,25 +93,22 @@ function FilterSection({ title, defaultOpen = true, children }: { title: string;
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
-interface RunCardData {
-  label: string;
-  status: 'running' | 'completed' | 'failed';
-  active: boolean;
-}
-
-const RUNS: RunCardData[] = [
-  { label: 'Run #001 — Loan Doc', status: 'running', active: true },
-  { label: 'Run #002 — Policy Rev', status: 'completed', active: false },
-  { label: 'Run #003 — Disclosure', status: 'failed', active: false },
-];
-
 const STATUS_DOT_COLOR: Record<string, string> = {
   running: 'bg-indigo-400',
   completed: 'bg-emerald-400',
   failed: 'bg-rose-400',
+  paused: 'bg-amber-400',
+  cancelled: 'bg-amber-400',
+  pending: 'bg-white/40',
 };
 
-function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect }: {
+  collapsed: boolean;
+  onToggle: () => void;
+  runs: RunListItem[];
+  activeRunId: string | null;
+  onRunSelect: (run: RunListItem) => void;
+}) {
   // Local checkbox state (filter state — purely UI for now)
   const [statusFilters, setStatusFilters] = useState<Record<string, boolean>>({});
   const [docTypeFilters, setDocTypeFilters] = useState<Record<string, boolean>>({});
@@ -188,25 +189,35 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
               Recent Runs
             </span>
             <div className="space-y-2">
-              {RUNS.map((run) => (
-                <div
-                  key={run.label}
-                  className={`
-                    group rounded-lg border px-3 py-2.5 cursor-pointer transition-all duration-150
-                    ${run.active
-                      ? 'border-indigo-500/40 bg-indigo-500/[0.08] border-l-[3px] border-l-indigo-500'
-                      : 'border-white/[0.06] bg-white/[0.02] hover:border-white/[0.14] hover:bg-white/[0.04]'
-                    }
-                  `}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT_COLOR[run.status] ?? 'bg-white/30'} ${run.status === 'running' ? 'animate-pulse' : ''}`} />
-                    <span className={`text-[13px] font-medium truncate ${run.active ? 'text-white/90' : 'text-white/55 group-hover:text-white/75'}`}>
-                      {run.label}
-                    </span>
+              {runs.length === 0 && (
+                <p className="text-[12px] text-white/30 italic">No runs yet</p>
+              )}
+              {runs.map((run) => {
+                const isActive = run.id === activeRunId;
+                const label = run.filename
+                  ? `${run.id.slice(0, 8)} — ${run.filename}`
+                  : `Run ${run.id.slice(0, 8)}`;
+                return (
+                  <div
+                    key={run.id}
+                    onClick={() => onRunSelect(run)}
+                    className={`
+                      group rounded-lg border px-3 py-2.5 cursor-pointer transition-all duration-150
+                      ${isActive
+                        ? 'border-indigo-500/40 bg-indigo-500/[0.08] border-l-[3px] border-l-indigo-500'
+                        : 'border-white/[0.06] bg-white/[0.02] hover:border-white/[0.14] hover:bg-white/[0.04]'
+                      }
+                    `}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT_COLOR[run.status] ?? 'bg-white/30'} ${run.status === 'running' ? 'animate-pulse' : ''}`} />
+                      <span className={`text-[13px] font-medium truncate ${isActive ? 'text-white/90' : 'text-white/55 group-hover:text-white/75'}`}>
+                        {label}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -219,7 +230,7 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
 
 type OverlayMode = 'none' | 'history' | 'cost';
 
-function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, totalCost, onStartPipeline, isUploading, activeRunId, activeFilename }: {
+function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, totalCost, onStartPipeline, isUploading, activeRunId, activeFilename, canResume, isResuming, onResume }: {
   runStatus: string;
   connectionLost: boolean;
   overlayMode: OverlayMode;
@@ -229,6 +240,9 @@ function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, total
   isUploading: boolean;
   activeRunId: string | null;
   activeFilename: string | null;
+  canResume: boolean;
+  isResuming: boolean;
+  onResume: () => void;
 }) {
   return (
     <div className="flex items-center justify-between h-12 px-4 border-b border-white/[0.06] bg-[#0c0f1a]/80 backdrop-blur-sm">
@@ -300,6 +314,8 @@ function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, total
         >
           {isUploading ? 'Uploading...' : runStatus === 'running' ? 'Running...' : 'Start pipeline'}
         </button>
+
+        <ResumeButton canResume={canResume} isResuming={isResuming} onResume={onResume} />
       </div>
     </div>
   );
@@ -424,42 +440,6 @@ function buildEdges(
 
 // ─── Mock overlay data ───────────────────────────────────────────────────────
 
-// History mode: how many times each node has been touched by incremental updates
-const MOCK_HISTORY_COUNTS: Record<string, number> = {
-  ingest: 3,
-  extract_text: 2,
-  classify_document: 1,
-  chunk: 2,
-  embed: 1,
-  extract_claims: 4,
-  match_rules: 2,
-  match_rules_against_sources: 1,
-  merge_findings: 3,
-  score_confidence: 1,
-  route_to_queue: 2,
-  human_review: 0,
-  finalize: 0,
-};
-
-// Cost mode: per-node time and cost
-const MOCK_COST_DATA: Record<string, { time: string; cost: string }> = {
-  ingest: { time: '1.2s', cost: '$0.00' },
-  extract_text: { time: '3.4s', cost: '$0.02' },
-  classify_document: { time: '0.8s', cost: '$0.01' },
-  chunk: { time: '0.3s', cost: '$0.00' },
-  embed: { time: '2.1s', cost: '$0.04' },
-  extract_claims: { time: '4.7s', cost: '$0.08' },
-  match_rules: { time: '1.9s', cost: '$0.03' },
-  match_rules_against_sources: { time: '2.3s', cost: '$0.05' },
-  merge_findings: { time: '0.5s', cost: '$0.00' },
-  score_confidence: { time: '1.1s', cost: '$0.02' },
-  route_to_queue: { time: '0.2s', cost: '$0.00' },
-  human_review: { time: '—', cost: '—' },
-  finalize: { time: '—', cost: '—' },
-};
-
-const MOCK_TOTAL_COST = '$0.25 · 18.5s';
-
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export function PipelineCanvas() {
@@ -478,6 +458,60 @@ export function PipelineCanvas() {
 
   // Poll real state via SSE/polling
   const { nodeStatuses, edgeDecisions, recentTransitions, runState, connectionLost } = usePipelineState(activeRunId);
+
+  // Cost overlay data (fetched from backend)
+  const [costData, setCostData] = useState<Record<string, { time: string; cost: string }>>({});
+  const [totalCostLabel, setTotalCostLabel] = useState<string | null>(null);
+
+  // History overlay data (fetched from backend)
+  const [historyCounts, setHistoryCounts] = useState<Record<string, number>>({});
+
+  // Resume state
+  const [isResuming, setIsResuming] = useState(false);
+
+  // Fetch cost data when overlay switches to 'cost' or activeRunId changes
+  useEffect(() => {
+    if (overlayMode !== 'cost' || !activeRunId) {
+      return;
+    }
+    fetchRunCost(activeRunId)
+      .then((result) => {
+        const perNode: Record<string, { time: string; cost: string }> = {};
+        for (const stage of result.stages) {
+          const timeSec = stage.duration_ms != null ? `${(stage.duration_ms / 1000).toFixed(1)}s` : '—';
+          const costUsd = stage.cost_usd != null ? `$${stage.cost_usd.toFixed(2)}` : '—';
+          perNode[stage.stage] = { time: timeSec, cost: costUsd };
+        }
+        setCostData(perNode);
+        const totalSec = (result.total_duration_ms / 1000).toFixed(1);
+        setTotalCostLabel(`$${result.total_cost_usd.toFixed(2)} · ${totalSec}s`);
+      })
+      .catch(() => {
+        setCostData({});
+        setTotalCostLabel(null);
+      });
+  }, [overlayMode, activeRunId]);
+
+  // Fetch history data when overlay switches to 'history' or activeRunId changes
+  useEffect(() => {
+    if (overlayMode !== 'history' || !activeRunId) {
+      return;
+    }
+    fetchRunHistory(activeRunId)
+      .then((result) => {
+        // Count events per node by grouping on entity_id (node name) or action
+        const counts: Record<string, number> = {};
+        for (const entry of result.entries) {
+          // entity_id often contains the node/stage name
+          const key = entry.entity_id;
+          counts[key] = (counts[key] ?? 0) + 1;
+        }
+        setHistoryCounts(counts);
+      })
+      .catch(() => {
+        setHistoryCounts({});
+      });
+  }, [overlayMode, activeRunId]);
 
   // Show report when pipeline completes
   useEffect(() => {
@@ -508,6 +542,29 @@ export function PipelineCanvas() {
   const handleStartPipeline = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  // Handle resume for paused/interrupted/cancelled runs
+  const handleResume = useCallback(async () => {
+    if (!activeRunId) return;
+    setIsResuming(true);
+    try {
+      await resumeRun(activeRunId);
+      // Re-fetch runs to update status in sidebar
+      fetchPipelineRuns().then(setRuns).catch(() => {});
+    } catch (err) {
+      console.error('Resume failed:', err);
+      alert(`Failed to resume: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsResuming(false);
+    }
+  }, [activeRunId]);
+
+  // Determine if the current run is resumable
+  const canResume = Boolean(
+    activeRunId &&
+    runState &&
+    ['paused', 'cancelled', 'failed'].includes(runState.run_status)
+  );
 
   // Handle file selection — upload then start pipeline
   const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -580,8 +637,8 @@ export function PipelineCanvas() {
       data: {
         ...node.data,
         overlayMode,
-        historyCount: MOCK_HISTORY_COUNTS[node.id] ?? 0,
-        costData: MOCK_COST_DATA[node.id] ?? null,
+        historyCount: historyCounts[node.id] ?? 0,
+        costData: costData[node.id] ?? null,
       },
     }));
   });
@@ -615,13 +672,13 @@ export function PipelineCanvas() {
             icon: nodeDef?.icon ?? 'document',
             justTransitioned: transitionedNodeIds.has(node.id),
             overlayMode,
-            historyCount: MOCK_HISTORY_COUNTS[node.id] ?? 0,
-            costData: MOCK_COST_DATA[node.id] ?? null,
+            historyCount: historyCounts[node.id] ?? 0,
+            costData: costData[node.id] ?? null,
           },
         };
       })
     );
-  }, [nodeStatuses, transitionedNodeIds, overlayMode]);
+  }, [nodeStatuses, transitionedNodeIds, overlayMode, costData, historyCounts]);
 
   // Handle node changes (drag, selection, etc.) — this is what makes
   // dragging work in React Flow's controlled mode.
@@ -641,7 +698,16 @@ export function PipelineCanvas() {
 
   return (
     <div className="flex h-screen w-screen bg-[#0b0f19] text-white overflow-hidden">
-      <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
+        runs={_runs}
+        activeRunId={activeRunId}
+        onRunSelect={(run) => {
+          setActiveRunId(run.id);
+          setActiveFilename(run.filename);
+        }}
+      />
 
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar
@@ -649,11 +715,14 @@ export function PipelineCanvas() {
           connectionLost={connectionLost}
           overlayMode={overlayMode}
           onOverlayChange={setOverlayMode}
-          totalCost={overlayMode === 'cost' ? MOCK_TOTAL_COST : null}
+          totalCost={overlayMode === 'cost' ? totalCostLabel : null}
           onStartPipeline={handleStartPipeline}
           isUploading={isUploading}
           activeRunId={activeRunId}
           activeFilename={activeFilename}
+          canResume={canResume}
+          isResuming={isResuming}
+          onResume={handleResume}
         />
 
         {/* Hidden file input for upload */}

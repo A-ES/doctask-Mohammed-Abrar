@@ -3,6 +3,7 @@
 
 from src.models.base import Base, TimestampMixin
 from src.models.documents import Document, DocumentVersion
+from src.models.piles import Pile, PileDocument
 from src.models.runs import Run, RunStep
 from src.models.claims import Claim, SourceLocation
 from src.models.approval import ApprovalQueue, Decision
@@ -14,6 +15,8 @@ __all__ = [
     "TimestampMixin",
     "Document",
     "DocumentVersion",
+    "Pile",
+    "PileDocument",
     "Run",
     "RunStep",
     "Claim",

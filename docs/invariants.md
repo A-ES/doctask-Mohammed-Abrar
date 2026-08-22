@@ -67,30 +67,54 @@ These invariants are absolute — violations are treated as system bugs, never a
      via UI. A program must be able to approve/reject items without human
      interaction.
 
+## Document Piles
+
+9. **Documents belong to a pile.** Every document in the system is associated
+   with exactly one pile via the `pile_documents` junction table. A pile is
+   the unit of work handed to a pipeline run — it groups related documents
+   (e.g. a loan application package) so they are processed together.
+
+10. **A run is started against a pile (and a playbook).** The `runs` table
+    carries an explicit `pile_id` foreign key. The pipeline processes all
+    documents in the pile at run-start time. This is the canonical way to
+    tell the system "these documents go together."
+
+11. **New documents can be added to an existing pile later; this does not
+    automatically rewrite previous run results.** Adding a document to a pile
+    after a run has completed (or while one is in progress) does NOT
+    retroactively modify that run's checkpoints, findings, or decisions.
+    A new run must be started explicitly to incorporate the new document.
+
+12. **Two concurrent runs against the same pile must not corrupt each other.**
+    This extends invariant 4. Per-run_id advisory locks already protect
+    checkpoint writes. The pile's document list is read at run-start time
+    and treated as immutable for the duration of that run — concurrent
+    additions to the pile are invisible to an in-flight run.
+
 ## Finding Integrity (Rules Checking Stage)
 
-6. **Findings are produced if and only if a rule evaluation returns verdict
-   "fail".** The rules checking stage never pads, forces, or synthesizes
-   findings. Specifically:
+13. **Findings are produced if and only if a rule evaluation returns verdict
+    "fail".** The rules checking stage never pads, forces, or synthesizes
+    findings. Specifically:
 
-   - A Finding is produced only when `verdict == "fail"`. Verdicts of
-     `pass`, `not_applicable`, or `insufficient_evidence` never produce
-     findings.
-   - When no rules are violated, the findings list is empty — never
-     populated with synthetic entries.
-   - Every Finding carries the exact source span (start_offset, end_offset,
-     text) that triggered the violation. Offsets are absolute positions in
-     the original document.
-   - Every Finding records the evaluation_method ("llm" or "structured")
-     that produced it.
+    - A Finding is produced only when `verdict == "fail"`. Verdicts of
+      `pass`, `not_applicable`, or `insufficient_evidence` never produce
+      findings.
+    - When no rules are violated, the findings list is empty — never
+      populated with synthetic entries.
+    - Every Finding carries the exact source span (start_offset, end_offset,
+      text) that triggered the violation. Offsets are absolute positions in
+      the original document.
+    - Every Finding records the evaluation_method ("llm" or "structured")
+      that produced it.
 
-7. **Adding a compliance rule never requires modifying Python source files.**
-   New rules are added by editing YAML playbook files under `rules/`. The
-   pipeline evaluates any rule present in a valid playbook without code
-   changes. This is validated by test (`test_extensibility.py`).
+14. **Adding a compliance rule never requires modifying Python source files.**
+    New rules are added by editing YAML playbook files under `rules/`. The
+    pipeline evaluates any rule present in a valid playbook without code
+    changes. This is validated by test (`test_extensibility.py`).
 
-8. **Rule evaluation errors are correctly classified.** LLM API failures
-   produce transient errors (retryable). Unknown playbook IDs or invalid
-   YAML produce permanent errors (stop immediately). Zero applicable rules
-   or zero source spans produce empty findings with status "completed" — 
-   never an error state.
+15. **Rule evaluation errors are correctly classified.** LLM API failures
+    produce transient errors (retryable). Unknown playbook IDs or invalid
+    YAML produce permanent errors (stop immediately). Zero applicable rules
+    or zero source spans produce empty findings with status "completed" — 
+    never an error state.

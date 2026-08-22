@@ -41,6 +41,13 @@ class Run(Base):
         Integer, nullable=False, server_default=text("1")
     )
 
+    # Optional pile reference (nullable for backward compat with old one-shot runs)
+    pile_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("piles.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
     # Relationships
     steps: Mapped[list["RunStep"]] = relationship(
         "RunStep", back_populates="run", lazy="selectin"
