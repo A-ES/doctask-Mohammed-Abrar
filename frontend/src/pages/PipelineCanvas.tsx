@@ -18,7 +18,7 @@ import { NodeDetailPanel } from '@/components/pipeline/NodeDetailPanel';
 import { ReportPanel } from '@/components/pipeline/ReportPanel';
 import { usePipelineState } from '@/hooks/usePipelineState';
 import { applyDagreLayout } from '@/utils/pipelineLayout';
-import { fetchPipelineRuns, fetchRunCost, fetchRunHistory, resumeRun } from '@/services/pipelineApi';
+import { fetchPipelineRuns, fetchRunCost, fetchRunHistory, resumeRun, deleteRun } from '@/services/pipelineApi';
 import type { RunListItem, PileListItem } from '@/services/pipelineApi';
 import { fetchPileDetail, startPipelineWithPile } from '@/services/pipelineApi';
 import { ResumeButton } from '@/components/review/ResumeButton';
@@ -101,12 +101,13 @@ const STATUS_DOT_COLOR: Record<string, string> = {
   pending: 'bg-white/40',
 };
 
-function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, selectedPileId, onPileSelect, onDocumentsUploaded }: {
+function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, onRunDelete, selectedPileId, onPileSelect, onDocumentsUploaded }: {
   collapsed: boolean;
   onToggle: () => void;
   runs: RunListItem[];
   activeRunId: string | null;
   onRunSelect: (run: RunListItem) => void;
+  onRunDelete: (runId: string) => void;
   selectedPileId: string | null;
   onPileSelect: (pile: PileListItem) => void;
   onDocumentsUploaded: () => void;
@@ -232,6 +233,15 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, selected
                           </span>
                         )}
                       </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onRunDelete(run.id); }}
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded text-white/30 hover:text-rose-400 hover:bg-rose-500/10 transition-all"
+                        title="Delete run"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                          <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
                     </div>
                   </div>
                 );
@@ -616,15 +626,10 @@ export function PipelineCanvas() {
         return;
       }
 
-      // Use the first document in the pile as the primary processing target
       const firstDoc = detail.documents[0];
 
-      // Start pipeline with pile_id
-      const startResult = await startPipelineWithPile(
-        firstDoc.document_id,
-        firstDoc.document_id, // document_version_id — backend resolves latest version
-        selectedPileId,
-      );
+      // Start pipeline — only pass pile_id; backend resolves documents + versions
+      const startResult = await startPipelineWithPile(selectedPileId);
 
       // Switch to tracking this run
       setActiveRunId(startResult.run_id);
@@ -791,6 +796,19 @@ export function PipelineCanvas() {
         onRunSelect={(run) => {
           setActiveRunId(run.id);
           setActiveFilename(run.filename);
+        }}
+        onRunDelete={async (runId) => {
+          if (!confirm('Delete this run? This cannot be undone.')) return;
+          try {
+            await deleteRun(runId);
+            setRuns((prev) => prev.filter((r) => r.id !== runId));
+            if (activeRunId === runId) {
+              setActiveRunId(null);
+              setActiveFilename(null);
+            }
+          } catch (err) {
+            alert(`Failed to delete: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          }
         }}
         selectedPileId={selectedPileId}
         onPileSelect={handlePileSelect}

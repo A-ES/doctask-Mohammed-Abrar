@@ -147,11 +147,29 @@ export function ReportPanel({ runId, runStatus, onClose, open, onOpenApprovals }
           setError('Failed to load report data');
         }
 
+        let approvalData: ApprovalQueueData | null = null;
         if (approvalRes.ok) {
-          setApprovals(await approvalRes.json());
-        } else {
-          setApprovals(null);
+          approvalData = await approvalRes.json();
         }
+
+        // If there are escalated claims but no approval items, backfill the queue
+        if (approvalData && approvalData.total === 0) {
+          try {
+            const backfillRes = await fetch(`${BASE_URL}/runs/${runId}/populate-queue`, { method: 'POST' });
+            if (backfillRes.ok) {
+              const backfillData = await backfillRes.json();
+              if (backfillData.created > 0) {
+                // Re-fetch approval queue after backfill
+                const refetchRes = await fetch(`${BASE_URL}/approval/runs/${runId}/queue`);
+                if (refetchRes.ok) {
+                  approvalData = await refetchRes.json();
+                }
+              }
+            }
+          } catch { /* backfill is best-effort */ }
+        }
+
+        setApprovals(approvalData);
       } catch {
         setError('Network error loading report');
       } finally {
@@ -163,6 +181,26 @@ export function ReportPanel({ runId, runStatus, onClose, open, onOpenApprovals }
   }, [open, runId]);
 
   if (!open) return null;
+
+  // Handle inline approve/reject decisions
+  const handleDecision = async (itemId: string, decision: 'approved' | 'rejected') => {
+    try {
+      await fetch(`${BASE_URL}/approval/items/${itemId}/decide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision, reviewer_id: 'report-user', justification: `${decision} via compliance report` }),
+      });
+      // Update local state
+      setApprovals((prev) => {
+        if (!prev) return prev;
+        const updatedItems = prev.items.map((item) =>
+          item.id === itemId ? { ...item, status: decision, decision, decided_at: new Date().toISOString() } : item
+        );
+        const pendingNow = updatedItems.filter((i) => i.status === 'pending').length;
+        return { ...prev, items: updatedItems, pending: pendingNow };
+      });
+    } catch { /* keep original state on failure */ }
+  };
 
   const shortRunId = runId?.slice(0, 8) ?? '—';
   const filename = report?.document?.filename ?? '—';
@@ -295,7 +333,7 @@ export function ReportPanel({ runId, runStatus, onClose, open, onOpenApprovals }
                   </div>
                   <div className="space-y-1.5 max-h-[250px] overflow-y-auto">
                     {approvals!.items.map((item) => (
-                      <ApprovalItemRow key={item.id} item={item} />
+                      <ApprovalItemRow key={item.id} item={item} onDecide={handleDecision} />
                     ))}
                   </div>
                 </div>
@@ -426,7 +464,8 @@ function ClaimRow({ claim, pendingItems }: {
   );
 }
 
-function ApprovalItemRow({ item }: { item: ApprovalItem }) {
+function ApprovalItemRow({ item, onDecide }: { item: ApprovalItem; onDecide?: (itemId: string, decision: 'approved' | 'rejected') => void }) {
+  const [submitting, setSubmitting] = useState<string | null>(null);
   const statusStyles: Record<string, string> = {
     pending: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
     approved: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
@@ -435,13 +474,39 @@ function ApprovalItemRow({ item }: { item: ApprovalItem }) {
 
   const summary = item.payload?.summary ?? item.payload?.claim_text ?? item.id.slice(0, 12);
 
+  const handleDecide = async (decision: 'approved' | 'rejected') => {
+    setSubmitting(decision);
+    if (onDecide) await onDecide(item.id, decision);
+    setSubmitting(null);
+  };
+
   return (
     <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#0a0d16]/60 border border-white/[0.03]">
       <span className={`flex-shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider border ${statusStyles[item.status] ?? statusStyles.pending}`}>
         {item.status}
       </span>
       <p className="flex-1 text-[11px] text-white/60 truncate">{summary}</p>
-      <span className="text-[9px] text-white/20 font-mono flex-shrink-0">{item.item_type}</span>
+      {item.status === 'pending' && onDecide && (
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={() => handleDecide('approved')}
+            disabled={submitting !== null}
+            className="px-1.5 py-0.5 rounded text-[9px] font-medium text-emerald-300 hover:bg-emerald-500/15 border border-emerald-500/20 transition-colors disabled:opacity-40"
+          >
+            {submitting === 'approved' ? '...' : 'Approve'}
+          </button>
+          <button
+            onClick={() => handleDecide('rejected')}
+            disabled={submitting !== null}
+            className="px-1.5 py-0.5 rounded text-[9px] font-medium text-rose-300 hover:bg-rose-500/15 border border-rose-500/20 transition-colors disabled:opacity-40"
+          >
+            {submitting === 'rejected' ? '...' : 'Reject'}
+          </button>
+        </div>
+      )}
+      {item.status !== 'pending' && (
+        <span className="text-[9px] text-white/20 font-mono flex-shrink-0">{item.item_type}</span>
+      )}
     </div>
   );
 }

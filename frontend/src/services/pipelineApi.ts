@@ -328,19 +328,17 @@ export async function uploadToPile(pileId: string, files: File[]): Promise<Uploa
 }
 
 /**
- * Start a pipeline run against a pile (using its first document for now).
+ * Start a pipeline run against a pile.
+ * Only pile_id is required — the backend resolves all pile documents
+ * and picks the latest version for each.
  */
 export async function startPipelineWithPile(
-  documentId: string,
-  documentVersionId: string,
   pileId: string,
 ): Promise<StartPipelineResponse> {
   const response = await fetch(`${BASE_URL}/runs/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      document_id: documentId,
-      document_version_id: documentVersionId,
       pile_id: pileId,
     }),
   });
@@ -395,4 +393,29 @@ export async function uploadIncrementalDocument(
   }
 
   return response.json();
+}
+
+
+// ─── Delete API ──────────────────────────────────────────────────────────────
+
+/**
+ * Delete a pile (soft delete — marks as deleted).
+ */
+export async function deletePile(pileId: string): Promise<void> {
+  const response = await fetch(`${BASE_URL}/piles/${pileId}`, { method: 'DELETE' });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Delete failed' }));
+    throw new Error(error.detail || `Delete pile failed: ${response.status}`);
+  }
+}
+
+/**
+ * Delete a pipeline run and its steps.
+ */
+export async function deleteRun(runId: string): Promise<void> {
+  const response = await fetch(`${BASE_URL}/runs/${runId}`, { method: 'DELETE' });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Delete failed' }));
+    throw new Error(error.detail || `Delete run failed: ${response.status}`);
+  }
 }

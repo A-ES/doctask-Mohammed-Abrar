@@ -230,7 +230,31 @@ async def start_pipeline(
             primary_version_id = request.document_version_id
 
         elif pile_document_ids:
-            # Pile-first mode: use first pile document as primary input
+            # Pile-first mode: validate all pile documents have versions,
+            # then use first pile document as primary input.
+            missing_version_docs: list[str] = []
+            for pd_id in pile_document_ids:
+                has_version = session.execute(
+                    select(DocumentVersion.id)
+                    .where(DocumentVersion.document_id == uuid.UUID(pd_id))
+                    .limit(1)
+                ).scalar_one_or_none()
+                if has_version is None:
+                    # Look up filename for a useful error message
+                    pd_doc = session.execute(
+                        select(Document).where(Document.id == uuid.UUID(pd_id))
+                    ).scalar_one_or_none()
+                    label = pd_doc.filename if pd_doc else pd_id
+                    missing_version_docs.append(label)
+
+            if missing_version_docs:
+                names = ", ".join(missing_version_docs)
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"The following pile documents have no usable version: {names}. "
+                           "Re-upload these documents before starting the pipeline.",
+                )
+
             first_doc_id = pile_document_ids[0]
             doc = session.execute(
                 select(Document).where(Document.id == uuid.UUID(first_doc_id))
@@ -243,8 +267,6 @@ async def start_pipeline(
                 .where(DocumentVersion.document_id == doc.id)
                 .order_by(DocumentVersion.version_number.desc())
             ).scalars().first()
-            if version is None:
-                raise HTTPException(status_code=500, detail="No version found for pile document")
 
             storage_path = version.storage_ref
             mime_type = doc.mime_type
@@ -853,6 +875,140 @@ def _generate_summary(verdict: str, non_compliant: int, indeterminate: int, comp
         parts.append(f"{len(findings)} finding(s) were identified during source document analysis.")
 
     return " ".join(parts)
+
+
+# ─── Approval queue backfill for existing runs ───────────────────────────────
+
+
+@app.delete("/runs/{run_id}")
+async def delete_run(run_id: str) -> dict:
+    """Delete a pipeline run and its associated data.
+
+    Hard-deletes run_steps and claims rows, then the run row itself.
+    Uses core-level deletes to bypass ORM version checks.
+    This is irreversible.
+    """
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(Run).where(Run.id == uuid.UUID(run_id))
+        ).scalar_one_or_none()
+
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        run_uuid = uuid.UUID(run_id)
+
+        # Delete dependent rows first (FK constraints) using core-level deletes
+        # to avoid ORM version_id checks
+        from src.models.runs import RunStep as RunStepModel
+        from src.models.claims import Claim
+
+        session.execute(
+            RunStepModel.__table__.delete().where(RunStepModel.__table__.c.run_id == run_uuid)
+        )
+        session.execute(
+            Claim.__table__.delete().where(Claim.__table__.c.run_id == run_uuid)
+        )
+        # Delete the run itself via core table delete (bypasses OCC version check)
+        session.execute(
+            Run.__table__.delete().where(Run.__table__.c.id == run_uuid)
+        )
+        session.commit()
+
+        return {"id": run_id, "status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete run: {e}")
+    finally:
+        session.close()
+
+
+@app.post("/runs/{run_id}/populate-queue")
+async def populate_approval_queue(run_id: str) -> dict:
+    """Backfill the approval queue from a completed run's escalated claims.
+
+    This handles the case where a run completed before the approval-enqueue
+    fix was deployed. It reads the route_to_queue node's output_state to find
+    escalated claim IDs, then creates pending approval items for any that
+    don't already exist in the queue.
+
+    Idempotent: calling multiple times won't create duplicates.
+    """
+    from src.pipeline.approval_api import get_approval_service
+
+    session = SessionLocal()
+    try:
+        # Get the route_to_queue step output
+        rtq_step = session.execute(
+            select(RunStep).where(
+                RunStep.run_id == uuid.UUID(run_id),
+                RunStep.step_name == "route_to_queue",
+            )
+        ).scalar_one_or_none()
+
+        if rtq_step is None:
+            raise HTTPException(status_code=404, detail="Run has no route_to_queue step")
+
+        output = rtq_step.output_state or {}
+        buckets = output.get("queue_buckets", {})
+        escalated_ids = buckets.get("escalate", [])
+
+        if not escalated_ids:
+            return {"run_id": run_id, "created": 0, "message": "No escalated claims to enqueue"}
+
+        # Get claims data for enriched payloads
+        claims = output.get("claims", [])
+        claim_map = {c.get("claim_id", ""): c for c in claims}
+
+        # Check what's already in the queue
+        approval_service = get_approval_service()
+        existing_items = approval_service.get_all(run_id)
+        existing_claim_ids = set()
+        for item in existing_items:
+            cid = item.payload.get("details", {}).get("claim_id") or item.payload.get("claim_id", "")
+            if cid:
+                existing_claim_ids.add(cid)
+
+        # Enqueue missing items
+        created = 0
+        for claim_id in escalated_ids:
+            if claim_id in existing_claim_ids:
+                continue
+
+            claim_data = claim_map.get(claim_id, {})
+            claim_text = claim_data.get("claim_text", claim_id)
+            confidence = claim_data.get("confidence", 0)
+            citation_status = claim_data.get("citation_status", "grounded")
+
+            approval_service.enqueue_item(
+                run_id=run_id,
+                item_type="finding",
+                payload={
+                    "summary": claim_text,
+                    "details": {
+                        "claim_id": claim_id,
+                        "confidence": confidence,
+                        "severity": "medium" if confidence < 0.7 else "low",
+                        "evaluation_method": "llm",
+                    },
+                    "source_citations": [
+                        {
+                            "claim_id": claim_id,
+                            "claim_text": claim_text,
+                            "citation_status": citation_status,
+                            "source_location": None,
+                        }
+                    ],
+                },
+            )
+            created += 1
+
+        return {"run_id": run_id, "created": created, "total_escalated": len(escalated_ids)}
+    finally:
+        session.close()
 
 
 # ─── SSE streaming ────────────────────────────────────────────────────────────

@@ -271,3 +271,33 @@ async def upload_to_pile(
         raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
     finally:
         session.close()
+
+
+@router.delete("/{pile_id}")
+async def delete_pile(pile_id: str) -> dict:
+    """Delete a pile by archiving it (soft delete).
+
+    Sets pile status to 'archived'. Does not remove documents from the
+    documents table — they may be referenced by other piles or runs.
+    """
+    session = SessionLocal()
+    try:
+        pile = session.execute(
+            select(Pile).where(Pile.id == uuid.UUID(pile_id))
+        ).scalar_one_or_none()
+
+        if pile is None:
+            raise HTTPException(status_code=404, detail="Pile not found")
+
+        pile.status = "archived"
+        pile.updated_at = datetime.now(timezone.utc)
+        session.commit()
+
+        return {"id": pile_id, "status": "archived"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete pile: {e}")
+    finally:
+        session.close()

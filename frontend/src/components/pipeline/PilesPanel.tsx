@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchPiles, createPile, fetchPileDetail, uploadToPile, uploadIncrementalDocument } from '@/services/pipelineApi';
+import { fetchPiles, createPile, fetchPileDetail, uploadToPile, uploadIncrementalDocument, deletePile } from '@/services/pipelineApi';
 import type { PileListItem, PileDetail, IncrementalUpdateResponse } from '@/services/pipelineApi';
 import { FileDropZone } from './FileDropZone';
 
@@ -148,26 +148,47 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
         {piles.map((pile) => {
           const isActive = pile.id === selectedPileId;
           return (
-            <button
+            <div
               key={pile.id}
-              onClick={() => onPileSelect(pile)}
               className={`
-                w-full text-left rounded-md px-2.5 py-2 transition-all duration-150
+                group w-full text-left rounded-md px-2.5 py-2 transition-all duration-150 cursor-pointer
                 ${isActive
                   ? 'bg-indigo-500/[0.12] border border-indigo-500/30'
                   : 'border border-transparent hover:bg-white/[0.04] hover:border-white/[0.08]'
                 }
               `}
+              onClick={() => onPileSelect(pile)}
             >
               <div className="flex items-center justify-between">
                 <span className={`text-[13px] font-medium truncate ${isActive ? 'text-white/90' : 'text-white/60'}`}>
                   {pile.name}
                 </span>
-                <span className="text-[10px] text-white/30 tabular-nums flex-shrink-0 ml-2">
-                  {pile.document_count} doc{pile.document_count !== 1 ? 's' : ''}
-                </span>
+                <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                  <span className="text-[10px] text-white/30 tabular-nums">
+                    {pile.document_count} doc{pile.document_count !== 1 ? 's' : ''}
+                  </span>
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!confirm(`Delete pile "${pile.name}"?`)) return;
+                      try {
+                        await deletePile(pile.id);
+                        await loadPiles();
+                        if (selectedPileId === pile.id) {
+                          setPileDetail(null);
+                        }
+                      } catch {}
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-white/25 hover:text-rose-400 transition-all"
+                    title="Delete pile"
+                  >
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
