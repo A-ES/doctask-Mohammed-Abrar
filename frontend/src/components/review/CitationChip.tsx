@@ -23,6 +23,7 @@ export function CitationChip({ citation }: CitationChipProps) {
   return (
     <span
       className={`${baseClasses} ${colorClasses}`}
+      title={citation.snippet ? `"${citation.snippet}"` : undefined}
       aria-label={
         unverifiable
           ? "Citation unverifiable"

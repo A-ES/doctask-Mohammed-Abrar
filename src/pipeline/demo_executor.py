@@ -102,6 +102,7 @@ async def run_pipeline(
         "storage_path": storage_path,
         "mime_type": mime_type,
         "filename": filename,
+        "run_id": run_id,
     }
 
     for step_order, (node_name, node_fn) in enumerate(nodes, start=1):
@@ -855,19 +856,61 @@ async def _node_route_to_queue(state: PipelineState, ctx: dict) -> PipelineState
 
 
 async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
-    """Human review node — in demo mode, auto-approve all escalated items."""
-    escalated = state.get("queue_buckets", {}).get("escalate", [])
+    """Human review node — enqueue escalated claims into the approval service.
 
-    # In demo mode, auto-approve all escalated claims (no real human-in-the-loop pause)
+    Each escalated claim becomes a pending approval item that can be
+    approved/rejected via the /approval/ API or MCP decide_approval tool.
+    This is the human gate — claims are NOT auto-approved.
+    """
+    from src.pipeline.approval_api import get_approval_service as _get_svc
+
+    escalated = state.get("queue_buckets", {}).get("escalate", [])
+    run_id = ctx.get("run_id") or state.get("run_id", "")
+
+    # Get approval service (set during app lifespan)
+    try:
+        approval_service = _get_svc()
+    except Exception:
+        approval_service = None
+
+    # Enqueue each escalated claim as a pending approval item
     decisions: list[Decision] = []
+    claims = state.get("claims", [])
+    claim_map = {c["claim_id"]: c for c in claims}
+
     for claim_id in escalated:
-        decisions.append(Decision(
-            claim_id=claim_id,
-            approval_queue_id=str(uuid.uuid4()),
-            decision_value="approved",
-            reviewer_id="auto-demo",
-            justification="Auto-approved in demo mode (no human pause)",
-        ))
+        claim_data = claim_map.get(claim_id, {})
+        claim_text = claim_data.get("claim_text", claim_id)
+        confidence = claim_data.get("confidence", 0)
+        citation_status = claim_data.get("citation_status", "grounded")
+
+        # Build payload matching the frontend QueueItemPayload shape:
+        #   { summary, details, source_citations[] }
+        payload = {
+            "summary": claim_text,
+            "details": {
+                "claim_id": claim_id,
+                "confidence": confidence,
+                "severity": "medium" if confidence < 0.7 else "low",
+                "evaluation_method": "llm",
+            },
+            "source_citations": [
+                {
+                    "claim_id": claim_id,
+                    "claim_text": claim_text,
+                    "citation_status": citation_status,
+                    "source_location": None,
+                }
+            ],
+        }
+
+        if approval_service:
+            approval_service.enqueue_item(
+                run_id=run_id,
+                item_type="finding",
+                payload=payload,
+            )
+        # No decision yet — items stay pending for human review
 
     completed = list(state.get("completed_nodes", []))
     completed.append("human_review")

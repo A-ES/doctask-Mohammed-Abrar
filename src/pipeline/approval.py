@@ -156,6 +156,14 @@ class InMemoryApprovalStore:
             item for item in self._items.values() if item.run_id == run_id
         ]
 
+    def get_all_pending(self) -> list[QueueItem]:
+        """Get all pending items across all runs."""
+        return [
+            item
+            for item in self._items.values()
+            if item.status == ItemStatus.PENDING
+        ]
+
     def record_decision(
         self,
         item_id: str,
@@ -284,3 +292,7 @@ class ApprovalService:
     def get_item(self, item_id: str) -> Optional[QueueItem]:
         """Get a single item by ID."""
         return self._store.get_item(item_id)
+
+    def get_all_pending(self) -> list[QueueItem]:
+        """Get all pending items across all runs."""
+        return self._store.get_all_pending()

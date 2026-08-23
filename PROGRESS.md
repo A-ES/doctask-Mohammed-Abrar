@@ -106,6 +106,47 @@
 
 **873 total tests passing.**
 
+## 2026-08-22 — Incremental Update Path complete
+
+**Built:**
+- `src/pipeline/incremental_api.py` — API module for focused incremental document updates
+- `POST /piles/{pile_id}/incremental` — upload document + incremental update (no full re-run)
+- `PATCH /piles/{pile_id}/watch` — configure watched folder path per pile (stored in pile metadata JSONB)
+- Wired into `main.py` with shared `ApprovalService` instance
+- Frontend: `uploadIncrementalDocument()` API function + "Add document (incremental)" button in PilesPanel
+- 13 new tests (`tests/test_incremental_api.py`) — all passing
+- FolderWatcher now connected to the pile system via the incremental API
+
+### How the Incremental Path Differs from a Full Run
+
+| Aspect | Full Run (`POST /runs/start`) | Incremental (`POST /piles/{pile_id}/incremental`) |
+|--------|-------------------------------|---------------------------------------------------|
+| **Nodes executed** | All 13 (ingest → finalize) | Only 3: text-extract, classify, extract-claims — for the new doc only |
+| **Scope** | Processes the entire document corpus from scratch | Processes ONLY the new document |
+| **Deliverable** | Built fresh from all claims | Reconstructed from latest completed run, then surgically updated |
+| **Unaffected sections** | Rebuilt entirely | Byte-identical (SHA-256 verified, never touched) |
+| **Conflict handling** | Findings → approval queue | Contradictions → approval queue with `item_type="conflict"` |
+| **Silent overwrite** | N/A | Never — contradictions always routed to human gate |
+| **Trigger** | Manual (UI "Start Run" button) | "Add document (incremental)" button or FolderWatcher scan |
+| **Cost** | Full LLM pipeline (13 nodes, all chunks) | Minimal LLM usage (classify + extract for 1 doc) |
+| **Audit trail** | Run + RunStep records | `audit_events` with `action="incremental_update"` |
+
+### Invariants Guaranteed
+
+1. **Hash identity**: Sections not affected by the new document retain their exact SHA-256 content hash. Verified by `TestIncrementalApiHashIdentity` (4 tests).
+
+2. **No silent overwrite**: When a new document contradicts an existing claim (same section key, different value), the conflict lands in the approval queue as a pending item. The original deliverable section is never auto-modified. Verified by `TestIncrementalApiContradiction` (4 tests).
+
+3. **Existing gates re-used**: Conflicts use the same `ApprovalService` → `POST /approval/items/{id}/decide` flow as the full pipeline's stay-alive stage.
+
+4. **Audit events emitted**: Every incremental update records an `audit_events` row with before/after section hashes and the list of affected sections.
+
+### Watched Folder Configuration
+
+A pile can optionally have a `watched_folder_path` in its metadata (set via `PATCH /piles/{pile_id}/watch`). The `FolderWatcher` class (already implemented) can monitor this path and call `process_single_file()` when new documents appear, triggering the same incremental engine internally.
+
+**886 total tests passing (873 + 13 new).**
+
 ## Assumptions Log
 
 | Date | Assumption | Reasoning |

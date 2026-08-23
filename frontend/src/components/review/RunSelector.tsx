@@ -48,6 +48,17 @@ export function RunSelector({ runs, selectedRunId, onSelectRun }: RunSelectorPro
           sideOffset={4}
         >
           <Select.Viewport className="p-1">
+            <Select.Item
+              value="all"
+              className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-white/70 outline-none transition-colors data-[highlighted]:bg-white/[0.06] data-[highlighted]:text-white border-b border-white/[0.06] mb-1"
+            >
+              <span
+                className="h-2 w-2 rounded-full bg-indigo-400"
+                aria-hidden="true"
+              />
+              <Select.ItemText>All pending</Select.ItemText>
+              <span className="ml-auto text-xs text-white/30">cross-run</span>
+            </Select.Item>
             {runs.map((run) => (
               <Select.Item
                 key={run.id}

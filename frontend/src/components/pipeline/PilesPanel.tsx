@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import { fetchPiles, createPile, fetchPileDetail, uploadToPile } from '@/services/pipelineApi';
-import type { PileListItem, PileDetail } from '@/services/pipelineApi';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { fetchPiles, createPile, fetchPileDetail, uploadToPile, uploadIncrementalDocument } from '@/services/pipelineApi';
+import type { PileListItem, PileDetail, IncrementalUpdateResponse } from '@/services/pipelineApi';
 import { FileDropZone } from './FileDropZone';
 
 interface PilesPanelProps {
@@ -20,6 +20,9 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
   const [newPileName, setNewPileName] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isIncremental, setIsIncremental] = useState(false);
+  const [incrementalResult, setIncrementalResult] = useState<IncrementalUpdateResponse | null>(null);
+  const incrementalInputRef = useRef<HTMLInputElement>(null);
 
   // Load piles list
   const loadPiles = useCallback(async () => {
@@ -74,6 +77,29 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
       setUploadError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       setIsUploading(false);
+    }
+  }, [selectedPileId, loadPiles, onDocumentsUploaded]);
+
+  const handleIncrementalUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !selectedPileId) return;
+    setIsIncremental(true);
+    setUploadError(null);
+    setIncrementalResult(null);
+    try {
+      const result = await uploadIncrementalDocument(selectedPileId, Array.from(files));
+      setIncrementalResult(result);
+      // Refresh pile detail
+      await loadPiles();
+      const detail = await fetchPileDetail(selectedPileId);
+      setPileDetail(detail);
+      onDocumentsUploaded();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Incremental update failed');
+    } finally {
+      setIsIncremental(false);
+      // Reset file input
+      if (incrementalInputRef.current) incrementalInputRef.current.value = '';
     }
   }, [selectedPileId, loadPiles, onDocumentsUploaded]);
 
@@ -177,6 +203,44 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
             isUploading={isUploading}
             disabled={false}
           />
+
+          {/* Incremental update action */}
+          <div className="pt-1.5">
+            <input
+              ref={incrementalInputRef}
+              type="file"
+              accept=".pdf,.docx,.txt"
+              onChange={handleIncrementalUpload}
+              className="hidden"
+              aria-label="Add document for incremental update"
+            />
+            <button
+              onClick={() => incrementalInputRef.current?.click()}
+              disabled={isIncremental}
+              className="w-full rounded-md border border-emerald-500/30 bg-emerald-500/[0.08] px-2.5 py-2 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/[0.15] hover:border-emerald-500/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {isIncremental ? 'Processing...' : 'Add document (incremental)'}
+            </button>
+            <p className="mt-1 text-[10px] text-white/30">
+              Updates only affected sections — no full re-run
+            </p>
+          </div>
+
+          {/* Incremental result feedback */}
+          {incrementalResult && (
+            <div className="rounded-md border border-emerald-500/20 bg-emerald-500/[0.05] px-2.5 py-2 space-y-1">
+              <p className="text-[11px] text-emerald-400 font-medium">Incremental update complete</p>
+              <p className="text-[10px] text-white/50">
+                {incrementalResult.sections_updated} section{incrementalResult.sections_updated !== 1 ? 's' : ''} updated,{' '}
+                {incrementalResult.unaffected_sections.length} unchanged
+              </p>
+              {incrementalResult.conflicts_detected > 0 && (
+                <p className="text-[10px] text-amber-400">
+                  {incrementalResult.conflicts_detected} conflict{incrementalResult.conflicts_detected !== 1 ? 's' : ''} sent to approval queue
+                </p>
+              )}
+            </div>
+          )}
 
           {uploadError && (
             <p className="text-[11px] text-rose-400">{uploadError}</p>

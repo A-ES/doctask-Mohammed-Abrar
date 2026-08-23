@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
@@ -18,9 +18,8 @@ import { NodeDetailPanel } from '@/components/pipeline/NodeDetailPanel';
 import { ReportPanel } from '@/components/pipeline/ReportPanel';
 import { usePipelineState } from '@/hooks/usePipelineState';
 import { applyDagreLayout } from '@/utils/pipelineLayout';
-import { uploadDocument, startPipeline, fetchPipelineRuns, fetchRunCost, fetchRunHistory, resumeRun } from '@/services/pipelineApi';
-import type { RunListItem } from '@/services/pipelineApi';
-import type { PileListItem } from '@/services/pipelineApi';
+import { fetchPipelineRuns, fetchRunCost, fetchRunHistory, resumeRun } from '@/services/pipelineApi';
+import type { RunListItem, PileListItem } from '@/services/pipelineApi';
 import { fetchPileDetail, startPipelineWithPile } from '@/services/pipelineApi';
 import { ResumeButton } from '@/components/review/ResumeButton';
 import { PilesPanel } from '@/components/pipeline/PilesPanel';
@@ -102,12 +101,15 @@ const STATUS_DOT_COLOR: Record<string, string> = {
   pending: 'bg-white/40',
 };
 
-function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect }: {
+function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, selectedPileId, onPileSelect, onDocumentsUploaded }: {
   collapsed: boolean;
   onToggle: () => void;
   runs: RunListItem[];
   activeRunId: string | null;
   onRunSelect: (run: RunListItem) => void;
+  selectedPileId: string | null;
+  onPileSelect: (pile: PileListItem) => void;
+  onDocumentsUploaded: () => void;
 }) {
   // Local checkbox state (filter state — purely UI for now)
   const [statusFilters, setStatusFilters] = useState<Record<string, boolean>>({});
@@ -148,6 +150,13 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect }: {
               className="w-full rounded-lg border border-white/[0.08] bg-white/[0.03] pl-8 pr-3 py-2 text-[13px] text-white/80 placeholder-white/30 transition-all focus:border-indigo-500/60 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:bg-white/[0.05] hover:border-white/[0.15]"
             />
           </div>
+
+          {/* Piles */}
+          <PilesPanel
+            selectedPileId={selectedPileId}
+            onPileSelect={onPileSelect}
+            onDocumentsUploaded={onDocumentsUploaded}
+          />
 
           {/* Filters */}
           <FilterSection title="Status">
@@ -194,9 +203,11 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect }: {
               )}
               {runs.map((run) => {
                 const isActive = run.id === activeRunId;
-                const label = run.filename
-                  ? `${run.id.slice(0, 8)} — ${run.filename}`
-                  : `Run ${run.id.slice(0, 8)}`;
+                const label = run.pile_name
+                  ? `${run.id.slice(0, 8)} — ${run.pile_name}`
+                  : run.filename
+                    ? `${run.id.slice(0, 8)} — ${run.filename}`
+                    : `Run ${run.id.slice(0, 8)}`;
                 return (
                   <div
                     key={run.id}
@@ -211,9 +222,16 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect }: {
                   >
                     <div className="flex items-center gap-2.5">
                       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT_COLOR[run.status] ?? 'bg-white/30'} ${run.status === 'running' ? 'animate-pulse' : ''}`} />
-                      <span className={`text-[13px] font-medium truncate ${isActive ? 'text-white/90' : 'text-white/55 group-hover:text-white/75'}`}>
-                        {label}
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <span className={`text-[13px] font-medium truncate block ${isActive ? 'text-white/90' : 'text-white/55 group-hover:text-white/75'}`}>
+                          {label}
+                        </span>
+                        {run.pile_name && (
+                          <span className="text-[10px] text-white/30 truncate block">
+                            Pile: {run.pile_name}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -230,7 +248,7 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect }: {
 
 type OverlayMode = 'none' | 'history' | 'cost';
 
-function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, totalCost, onStartPipeline, isUploading, activeRunId, activeFilename, canResume, isResuming, onResume }: {
+function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, totalCost, onStartPipeline, isUploading, activeRunId, activeFilename, canResume, isResuming, onResume, pendingCount, onOpenReview, onViewReport }: {
   runStatus: string;
   connectionLost: boolean;
   overlayMode: OverlayMode;
@@ -243,6 +261,9 @@ function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, total
   canResume: boolean;
   isResuming: boolean;
   onResume: () => void;
+  pendingCount: number;
+  onOpenReview: () => void;
+  onViewReport: () => void;
 }) {
   return (
     <div className="flex items-center justify-between h-12 px-4 border-b border-white/[0.06] bg-[#0c0f1a]/80 backdrop-blur-sm">
@@ -283,6 +304,16 @@ function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, total
             Σ {totalCost}
           </span>
         )}
+        {/* Pending approvals badge */}
+        {pendingCount > 0 && (
+          <button
+            onClick={onOpenReview}
+            className="flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 transition-colors"
+          >
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            {pendingCount} pending
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -302,6 +333,16 @@ function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, total
             </button>
           ))}
         </div>
+
+        {/* View Report button — only for completed/failed runs */}
+        {(runStatus === 'completed' || runStatus === 'failed') && activeRunId && (
+          <button
+            onClick={onViewReport}
+            className="rounded-md px-3 py-1.5 text-sm font-medium text-white/80 border border-white/[0.12] hover:bg-white/[0.05] hover:text-white transition-colors"
+          >
+            Report
+          </button>
+        )}
 
         <button
           onClick={onStartPipeline}
@@ -453,8 +494,11 @@ export function PipelineCanvas() {
   const [activeFilename, setActiveFilename] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [_runs, setRuns] = useState<RunListItem[]>([]);
-  const [_showReport, setShowReport] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showReport, setShowReport] = useState(false);
+
+  // Pile state
+  const [selectedPileId, setSelectedPileId] = useState<string | null>(null);
+  const [selectedPileName, setSelectedPileName] = useState<string | null>(null);
 
   // Poll real state via SSE/polling
   const { nodeStatuses, edgeDecisions, recentTransitions, runState, connectionLost } = usePipelineState(activeRunId);
@@ -468,6 +512,9 @@ export function PipelineCanvas() {
 
   // Resume state
   const [isResuming, setIsResuming] = useState(false);
+
+  // Pending approvals count (fetched from backend for current run)
+  const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
 
   // Fetch cost data when overlay switches to 'cost' or activeRunId changes
   useEffect(() => {
@@ -513,14 +560,28 @@ export function PipelineCanvas() {
       });
   }, [overlayMode, activeRunId]);
 
-  // Show report when pipeline completes
+  // Fetch pending approvals count when run completes or active run changes
   useEffect(() => {
-    if (runState?.run_status === 'completed' || runState?.run_status === 'failed') {
-      // Small delay so user sees the last node turn green
-      const timer = setTimeout(() => setShowReport(true), 1000);
-      return () => clearTimeout(timer);
+    if (!activeRunId) {
+      setPendingApprovalsCount(0);
+      return;
     }
-  }, [runState?.run_status]);
+    // Fetch after run completes, or on run switch
+    const shouldFetch = !runState || runState.run_status === 'completed' || runState.run_status === 'paused';
+    if (!shouldFetch) return;
+
+    fetch(`${import.meta.env.VITE_API_BASE_URL ?? ''}/approval/runs/${activeRunId}/queue`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data) setPendingApprovalsCount(data.pending ?? 0);
+      })
+      .catch(() => {});
+  }, [activeRunId, runState?.run_status]);
+
+  // Close report when active run changes (report is per-run; user must re-open explicitly)
+  useEffect(() => {
+    setShowReport(false);
+  }, [activeRunId]);
 
   // Load existing runs on mount
   useEffect(() => {
@@ -538,10 +599,55 @@ export function PipelineCanvas() {
     }).catch(() => {});
   }, []);
 
-  // Handle "Start pipeline" click — opens file picker
-  const handleStartPipeline = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
+  // Handle "Start pipeline" click — requires a selected pile with documents
+  const handleStartPipeline = useCallback(async () => {
+    if (!selectedPileId) {
+      alert('Please select a pile first.');
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      // Fetch pile detail to get first document for pipeline execution
+      const detail = await fetchPileDetail(selectedPileId);
+      if (detail.documents.length === 0) {
+        alert('The selected pile has no documents. Upload files first.');
+        setIsUploading(false);
+        return;
+      }
+
+      // Use the first document in the pile as the primary processing target
+      const firstDoc = detail.documents[0];
+
+      // Start pipeline with pile_id
+      const startResult = await startPipelineWithPile(
+        firstDoc.document_id,
+        firstDoc.document_id, // document_version_id — backend resolves latest version
+        selectedPileId,
+      );
+
+      // Switch to tracking this run
+      setActiveRunId(startResult.run_id);
+      setActiveFilename(selectedPileName ?? detail.name);
+
+      // Add to local runs
+      setRuns((prev) => [{
+        id: startResult.run_id,
+        status: 'running',
+        started_at: new Date().toISOString(),
+        document_id: firstDoc.document_id,
+        filename: firstDoc.filename,
+        pile_id: selectedPileId,
+        pile_name: selectedPileName ?? detail.name,
+      }, ...prev]);
+
+    } catch (err) {
+      console.error('Pipeline start failed:', err);
+      alert(`Failed to start pipeline: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [selectedPileId, selectedPileName]);
 
   // Handle resume for paused/interrupted/cancelled runs
   const handleResume = useCallback(async () => {
@@ -566,43 +672,15 @@ export function PipelineCanvas() {
     ['paused', 'cancelled', 'failed'].includes(runState.run_status)
   );
 
-  // Handle file selection — upload then start pipeline
-  const handleFileSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Handle pile selection
+  const handlePileSelect = useCallback((pile: PileListItem) => {
+    setSelectedPileId(pile.id);
+    setSelectedPileName(pile.name);
+  }, []);
 
-    setIsUploading(true);
-    try {
-      // 1. Upload the file
-      const uploadResult = await uploadDocument(file);
-
-      // 2. Start the pipeline
-      const startResult = await startPipeline(
-        uploadResult.document_id,
-        uploadResult.document_version_id,
-      );
-
-      // 3. Switch to tracking this run
-      setActiveRunId(startResult.run_id);
-      setActiveFilename(uploadResult.filename);
-
-      // Reset node statuses by updating run
-      setRuns((prev) => [{
-        id: startResult.run_id,
-        status: 'running',
-        started_at: new Date().toISOString(),
-        document_id: uploadResult.document_id,
-        filename: uploadResult.filename,
-      }, ...prev]);
-
-    } catch (err) {
-      console.error('Pipeline start failed:', err);
-      alert(`Failed to start pipeline: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setIsUploading(false);
-      // Reset file input
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+  // Callback when documents are uploaded to a pile (refresh runs, etc.)
+  const handleDocumentsUploaded = useCallback(() => {
+    // No-op for now; PilesPanel handles its own refresh
   }, []);
 
   const nodeTypes = useMemo(() => ({
@@ -643,17 +721,24 @@ export function PipelineCanvas() {
     }));
   });
 
-  // Track whether this is the initial mount
-  const isInitialMount = useRef(true);
-
   // Update node data when pipeline status or overlay mode changes.
   // Preserves user-dragged positions by only updating `data`, not `position`.
+  //
+  // STATUS → COLOUR CONTRACT:
+  //   The `status` field in each node's data drives the visual appearance via
+  //   STATUS_CONFIG in pipelineColors.ts. Values come from usePipelineState which
+  //   derives them from the backend /runs/{id}/state response:
+  //     'ready'      → neutral/grey (node hasn't run yet)
+  //     'processing' → indigo/blue with pulse (node is executing now)
+  //     'complete'   → emerald/green (node finished successfully)
+  //     'skipped'    → amber/muted (node was skipped)
+  //     'escalated'  → amber/bright (node escalated to human review)
+  //     'failed'     → rose/red (node errored permanently)
+  //     'retrying'   → indigo with pulse (node is retrying after transient error)
+  //
+  //   This effect MUST run whenever nodeStatuses changes so nodes re-render with
+  //   the correct colour. Do NOT add early-return guards here.
   useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
-
     setNodes((currentNodes) =>
       currentNodes.map((node) => {
         const status: NodeStatus =
@@ -707,6 +792,9 @@ export function PipelineCanvas() {
           setActiveRunId(run.id);
           setActiveFilename(run.filename);
         }}
+        selectedPileId={selectedPileId}
+        onPileSelect={handlePileSelect}
+        onDocumentsUploaded={handleDocumentsUploaded}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -723,16 +811,23 @@ export function PipelineCanvas() {
           canResume={canResume}
           isResuming={isResuming}
           onResume={handleResume}
+          pendingCount={pendingApprovalsCount}
+          onOpenReview={() => {
+            setSelectedNodeId('human_review');
+            setSelectedNodeLabel('Human Review');
+          }}
+          onViewReport={() => setShowReport(true)}
         />
 
-        {/* Hidden file input for upload */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,.docx,.txt,.text"
-          className="hidden"
-          onChange={handleFileSelected}
-        />
+        {/* Pile indicator in top bar */}
+        {selectedPileName && (
+          <div className="px-4 py-1.5 border-b border-white/[0.06] text-[12px] text-white/50 flex items-center gap-2">
+            <svg className="w-3.5 h-3.5 text-indigo-400/70" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M1 3.5A1.5 1.5 0 012.5 2h3.879a1.5 1.5 0 011.06.44l1.122 1.12A1.5 1.5 0 009.621 4H13.5A1.5 1.5 0 0115 5.5v7a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z" />
+            </svg>
+            <span>Pile: <span className="text-white/70 font-medium">{selectedPileName}</span></span>
+          </div>
+        )}
 
         <div className="flex-1 relative">
           <ReactFlow
@@ -769,11 +864,16 @@ export function PipelineCanvas() {
         </div>
       </div>
 
-      {/* Report panel — appears when pipeline completes */}
+      {/* Report panel — opened explicitly via Report button */}
       <ReportPanel
         runId={activeRunId}
         runStatus={runState?.run_status ?? null}
         onClose={() => setShowReport(false)}
+        open={showReport}
+        onOpenApprovals={() => {
+          setSelectedNodeId('human_review');
+          setSelectedNodeLabel('Human Review');
+        }}
       />
     </div>
   );

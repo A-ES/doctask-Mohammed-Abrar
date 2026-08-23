@@ -37,6 +37,10 @@ from src.models.runs import Run, RunStep
 from src.pipeline.approval import ApprovalService, InMemoryApprovalStore
 from src.pipeline.approval_api import router as approval_router, set_approval_service
 from src.pipeline.api import router as runs_router
+from src.pipeline.incremental_api import (
+    router as incremental_router,
+    set_incremental_approval_service,
+)
 from src.pipeline.piles_api import router as piles_router
 from src.pipeline.upload_api import router as upload_router
 
@@ -88,9 +92,11 @@ async def lifespan(app: FastAPI):
     store = InMemoryApprovalStore()
     service = ApprovalService(store)
     set_approval_service(service)
+    set_incremental_approval_service(service)
     logger.info("Application started. Approval service configured.")
     yield
     set_approval_service(None)
+    set_incremental_approval_service(None)
     logger.info("Application shutdown.")
 
 
@@ -115,6 +121,7 @@ app.include_router(upload_router)
 app.include_router(approval_router)
 app.include_router(runs_router)
 app.include_router(piles_router)
+app.include_router(incremental_router)
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────
@@ -388,7 +395,17 @@ async def list_runs() -> list[RunListItem]:
 async def get_run_state(run_id: str) -> dict:
     """Return pipeline run state for the frontend canvas.
 
-    Reads from the latest checkpoint in run_steps to give real-time progress.
+    Reads from run_steps to give real-time progress. Uses the last
+    *completed/skipped* step's output_state for accumulated results
+    (completed_nodes, retries, etc.) and separately identifies the
+    currently-running step (if any) as current_node.
+
+    STATUS → COLOUR CONTRACT (frontend relies on these values):
+      - completed_nodes: list of node names that finished successfully
+      - current_node: the node currently executing (or last executed)
+      - node_status: "completed" | "skipped" | "error" | "running" | "pending"
+      - run_status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused"
+    The frontend derives per-node visual state from these fields exclusively.
     """
     session = SessionLocal()
     try:
@@ -398,7 +415,7 @@ async def get_run_state(run_id: str) -> dict:
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        # Get latest completed step
+        # Get ALL steps ordered by step_order descending
         steps = session.execute(
             select(RunStep)
             .where(RunStep.run_id == uuid.UUID(run_id))
@@ -418,14 +435,40 @@ async def get_run_state(run_id: str) -> dict:
                 "run_status": run.status,
             }
 
-        # Use the latest step's output_state
-        latest = steps[0]
-        output_state = latest.output_state or {}
+        # Find the currently-running step (if any) and the last checkpointed step.
+        # A "running" step has output_state={} (written by _create_step before node
+        # executes). The last completed/skipped/failed step has the real accumulated
+        # state including completed_nodes.
+        running_step = None
+        checkpointed_step = None
+        for step in steps:
+            if step.status == "running" and running_step is None:
+                running_step = step
+            elif step.status in ("completed", "skipped", "failed") and checkpointed_step is None:
+                checkpointed_step = step
+            if running_step and checkpointed_step:
+                break
+
+        # Read accumulated state from the last checkpointed step's output_state.
+        # This contains completed_nodes, retries, skipped_nodes, etc.
+        output_state = (checkpointed_step.output_state or {}) if checkpointed_step else {}
+
+        # Determine current_node: prefer the running step (actively executing),
+        # fall back to the last checkpointed step name.
+        if running_step:
+            current_node = running_step.step_name
+            node_status = "running"
+        elif checkpointed_step:
+            current_node = output_state.get("current_node", checkpointed_step.step_name)
+            node_status = output_state.get("node_status", checkpointed_step.status)
+        else:
+            current_node = ""
+            node_status = "pending"
 
         return {
             "run_id": run_id,
-            "current_node": output_state.get("current_node", latest.step_name),
-            "node_status": output_state.get("node_status", latest.status),
+            "current_node": current_node,
+            "node_status": node_status,
             "completed_nodes": output_state.get("completed_nodes", []),
             "skipped_nodes": output_state.get("skipped_nodes", []),
             "retries": output_state.get("retries", {}),
@@ -492,7 +535,42 @@ async def get_node_details(run_id: str, node_id: str) -> dict:
         elif node_id == "extract_claims":
             claims = output.get("claims", [])
             details["claim_count"] = len(claims)
-            details["claims"] = claims
+            # Enrich claims with text snippet from the source chunks
+            chunks = output.get("chunks", [])
+            enriched_claims = []
+            for claim in claims:
+                enriched = dict(claim)
+                chunk_idx = claim.get("chunk_index")
+                start = claim.get("start_offset", 0)
+                end = claim.get("end_offset", 0)
+                # Resolve snippet from the chunk text using offsets
+                if chunks and chunk_idx is not None and 0 <= chunk_idx < len(chunks):
+                    chunk_text = chunks[chunk_idx].get("text", "")
+                    chunk_start = chunks[chunk_idx].get("start_offset", 0)
+                    # Offsets may be relative to chunk or to full doc — try both
+                    if start < len(chunk_text) and end <= len(chunk_text):
+                        snippet = chunk_text[start:end]
+                    elif start >= chunk_start:
+                        # Offsets relative to full doc — adjust
+                        local_start = start - chunk_start
+                        local_end = end - chunk_start
+                        if 0 <= local_start < len(chunk_text):
+                            snippet = chunk_text[local_start:min(local_end, len(chunk_text))]
+                        else:
+                            snippet = ""
+                    else:
+                        snippet = ""
+                    # Add surrounding context (30 chars before/after)
+                    if snippet:
+                        ctx_start = max(0, start - 30) if start < len(chunk_text) else max(0, (start - chunk_start) - 30)
+                        ctx_end_pos = min(len(chunk_text), (end if end < len(chunk_text) else end - chunk_start) + 30)
+                        context_before = chunk_text[ctx_start:start if start < len(chunk_text) else start - chunk_start].lstrip()
+                        context_after = chunk_text[(end if end < len(chunk_text) else end - chunk_start):ctx_end_pos].rstrip()
+                        enriched["snippet"] = snippet
+                        enriched["snippet_context_before"] = context_before
+                        enriched["snippet_context_after"] = context_after
+                enriched_claims.append(enriched)
+            details["claims"] = enriched_claims
 
         elif node_id in ("match_rules", "match_rules_against_sources"):
             details["verdicts"] = output.get("verdicts", [])

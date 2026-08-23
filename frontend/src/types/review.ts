@@ -23,6 +23,9 @@ export interface SourceCitation {
   claim_text: string;
   citation_status: "grounded" | "unverifiable";
   source_location: SourceLocation | null;
+  snippet?: string;
+  snippet_context_before?: string;
+  snippet_context_after?: string;
 }
 
 export interface SourceLocation {

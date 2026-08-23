@@ -35,6 +35,9 @@ function deriveNodeStatus(
   nodeName: string,
   state: PipelineRunState
 ): NodeStatus {
+  // STATUS DERIVATION — maps backend state to visual status.
+  // Priority order matters: completed > skipped > current/running > escalated > ready.
+  // See pipelineColors.ts for the full status→colour contract.
   if (state.completed_nodes.includes(nodeName)) return 'complete';
   if (state.skipped_nodes.some((s) => s.node_name === nodeName)) return 'skipped';
 

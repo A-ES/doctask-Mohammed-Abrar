@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { fetchQueue, fetchRunProgress } from "@/services/approvalApi";
+import { fetchQueue, fetchAllPending, fetchRunProgress } from "@/services/approvalApi";
 import { useQueueStore } from "@/stores/queueStore";
 import { useRunProgressStore } from "@/stores/runProgressStore";
 
@@ -35,15 +35,22 @@ export function usePolling(config: PollingConfig): PollingState {
 
     setIsPolling(true);
     try {
-      const [queueResponse, progressResponse] = await Promise.all([
-        fetchQueue(runId),
-        fetchRunProgress(runId),
-      ]);
+      let queueResponse;
+      if (runId === "all") {
+        // Cross-run "all pending" mode — skip progress fetch
+        queueResponse = await fetchAllPending();
+      } else {
+        const [queueResp, progressResponse] = await Promise.all([
+          fetchQueue(runId),
+          fetchRunProgress(runId),
+        ]);
+        queueResponse = queueResp;
+        setProgress(progressResponse);
+      }
 
       if (!isMountedRef.current) return;
 
       mergeItems(queueResponse.items, queueResponse.total, queueResponse.pending);
-      setProgress(progressResponse);
       setLastFetchedAt(new Date());
       setError(null);
       setConnectionLost(false);

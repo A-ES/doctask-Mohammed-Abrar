@@ -352,3 +352,47 @@ export async function startPipelineWithPile(
 
   return response.json();
 }
+
+
+// ─── Incremental Update API ──────────────────────────────────────────────────
+
+export interface IncrementalUpdateResponse {
+  pile_id: string;
+  document_id: string;
+  run_id: string;
+  affected_sections: string[];
+  unaffected_sections: string[];
+  conflicts_detected: number;
+  sections_updated: number;
+  approval_items_created: string[];
+  section_hashes: Record<string, string>;
+}
+
+/**
+ * Upload a document via the incremental update path.
+ *
+ * Unlike a full pipeline run, this only extracts claims from the new document,
+ * identifies affected sections, and routes conflicts to the approval queue.
+ * Unaffected sections remain byte-identical.
+ */
+export async function uploadIncrementalDocument(
+  pileId: string,
+  files: File[],
+): Promise<IncrementalUpdateResponse> {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append('files', file);
+  }
+
+  const response = await fetch(`${BASE_URL}/piles/${pileId}/incremental`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Incremental update failed' }));
+    throw new Error(error.detail || `Incremental update failed: ${response.status}`);
+  }
+
+  return response.json();
+}

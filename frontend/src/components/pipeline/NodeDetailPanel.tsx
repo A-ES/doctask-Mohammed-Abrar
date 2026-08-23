@@ -126,11 +126,23 @@ function CitationView({ citation, expanded, onToggle }: { citation: SourceCitati
         <div className="px-3 py-2 border-t border-white/[0.04] bg-[#0a0d16]">
           <div className="text-[10px] uppercase tracking-wider text-white/30 mb-1">Source Document · Page {citation.source_location.page_number}</div>
           <div className="text-sm text-white/60 leading-relaxed">
-            <span className="text-white/30">...preceding text content... </span>
-            <mark className="bg-indigo-500/20 text-indigo-200 px-0.5 rounded-sm border-b border-indigo-400/50">
-              {citation.claim_text}
-            </mark>
-            <span className="text-white/30"> ...following text content...</span>
+            {citation.snippet ? (
+              <>
+                <span className="text-white/30">{citation.snippet_context_before ? `...${citation.snippet_context_before}` : '...'}</span>
+                <mark className="bg-indigo-500/20 text-indigo-200 px-0.5 rounded-sm border-b border-indigo-400/50">
+                  {citation.snippet}
+                </mark>
+                <span className="text-white/30">{citation.snippet_context_after ? `${citation.snippet_context_after}...` : '...'}</span>
+              </>
+            ) : (
+              <>
+                <span className="text-white/30">...preceding text content... </span>
+                <mark className="bg-indigo-500/20 text-indigo-200 px-0.5 rounded-sm border-b border-indigo-400/50">
+                  {citation.claim_text}
+                </mark>
+                <span className="text-white/30"> ...following text content...</span>
+              </>
+            )}
           </div>
           <div className="mt-1.5 flex gap-3 text-[10px] text-white/30">
             <span>Section: {citation.source_location.section_id ?? '—'}</span>
@@ -196,12 +208,12 @@ function ItemCard({ item, onDecision }: { item: QueueItem; onDecision: (id: stri
             </span>
           )}
         </div>
-        <p className="text-sm font-medium text-white/85 leading-snug">{item.payload.summary}</p>
+        <p className="text-sm font-medium text-white/85 leading-snug">{item.payload.summary ?? (item.payload as any).claim_text ?? '—'}</p>
       </div>
 
       {/* Citations */}
       <div className="px-3 pb-2 space-y-1.5">
-        {item.payload.source_citations.map((cit) => (
+        {(item.payload.source_citations ?? []).map((cit) => (
           <CitationView
             key={cit.claim_id}
             citation={cit}
@@ -478,7 +490,7 @@ export function NodeDetailPanel({ nodeId, nodeLabel, onClose, runId }: NodeDetai
     fetchDetails();
   }, [nodeId, runId]);
 
-  // Fetch items for this node
+  // Fetch items for this node (approval queue items relevant to the clicked node)
   useEffect(() => {
     if (!nodeId) return;
     setLoading(true);
@@ -493,8 +505,18 @@ export function NodeDetailPanel({ nodeId, nodeLabel, onClose, runId }: NodeDetai
           setLoading(false);
           return;
         }
+
+        // Only fetch approval queue items for nodes in the stay-alive stage
+        // (route_to_queue, human_review, finalize) where approval items exist.
+        const approvalNodes = ['route_to_queue', 'human_review', 'finalize', 'score_confidence'];
+        if (!approvalNodes.includes(nodeId!)) {
+          setItems([]);
+          setLoading(false);
+          return;
+        }
+
         try {
-          const res = await fetch(`${BASE_URL}/approval/runs/${runId}/queue?node=${nodeId}`);
+          const res = await fetch(`${BASE_URL}/approval/runs/${runId}/queue`);
           if (res.ok) {
             const data = await res.json();
             setItems(data.items ?? []);

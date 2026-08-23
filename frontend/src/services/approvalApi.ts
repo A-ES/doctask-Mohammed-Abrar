@@ -105,6 +105,22 @@ export async function fetchQueue(runId: string): Promise<QueueListResponse> {
 }
 
 /**
+ * Fetches all pending approval items across all runs.
+ * GET /approval/pending
+ */
+export async function fetchAllPending(): Promise<QueueListResponse> {
+  if (USE_MOCK) return mockFetchQueue("all");
+  const response = await safeFetch(`${BASE_URL}/approval/pending`);
+  const data = await handleResponse<{ items: QueueListResponse["items"]; total: number }>(response);
+  return {
+    run_id: "all",
+    items: data.items,
+    total: data.total,
+    pending: data.total,
+  };
+}
+
+/**
  * Fetches a single queue item by ID.
  * GET /approval/items/{item_id}
  */

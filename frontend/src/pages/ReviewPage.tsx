@@ -159,10 +159,12 @@ export function ReviewPage() {
           onSelectRun={handleSelectRun}
         />
 
-        <ProgressStepper
-          completedNodes={completedNodes}
-          currentNode={currentNode}
-        />
+        {selectedRunId !== "all" && (
+          <ProgressStepper
+            completedNodes={completedNodes}
+            currentNode={currentNode}
+          />
+        )}
 
         <ConnectionLostBanner connectionLost={connectionLost} />
 

@@ -1,5 +1,25 @@
 import type { NodeStatus } from '@/types/pipeline';
 
+/**
+ * STATUS → COLOUR CONTRACT
+ *
+ * This mapping is the single source of truth for node visual appearance.
+ * The backend /runs/{id}/state endpoint returns per-node data; the frontend
+ * hook (usePipelineState.ts) derives a NodeStatus for each node; this config
+ * turns that status into Tailwind classes applied by PipelineNode / MergeNode.
+ *
+ * Backend status values that drive derivation (in usePipelineState.ts):
+ *   completed_nodes[]  → 'complete'   (green)
+ *   current_node + running → 'processing' (indigo pulse)
+ *   current_node + error + retries > 0 → 'retrying' (indigo pulse)
+ *   current_node + error (permanent) → 'failed' (rose/red)
+ *   skipped_nodes[]    → 'skipped'    (amber muted)
+ *   retries[node] >= 3 → 'escalated'  (amber bright)
+ *   otherwise          → 'ready'      (neutral grey)
+ *
+ * DO NOT rename these keys without updating PipelineNode.tsx, MergeNode.tsx,
+ * usePipelineState.ts, and the backend state endpoint contract.
+ */
 export const STATUS_CONFIG: Record<NodeStatus, { border: string; glow: string; text: string; label: string; dot: string }> = {
   ready: {
     border: 'border-white/20',

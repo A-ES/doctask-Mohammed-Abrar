@@ -121,6 +121,32 @@ def _item_to_response(item: QueueItem) -> QueueItemResponse:
 router = APIRouter(prefix="/approval", tags=["approval"])
 
 
+class AllPendingResponse(BaseModel):
+    """Response for listing all pending items across runs."""
+
+    items: list[QueueItemResponse]
+    total: int
+
+
+@router.get("/pending", response_model=AllPendingResponse)
+def list_all_pending(
+    service: ApprovalService = Depends(get_approval_service),
+) -> AllPendingResponse:
+    """List all pending approval items across all recent runs.
+
+    Provides a lightweight cross-run view of everything awaiting review.
+    Items are sorted by queued_at (most recent first).
+    """
+    items = service.get_all_pending()
+    # Sort by queued_at descending
+    items.sort(key=lambda i: i.queued_at, reverse=True)
+
+    return AllPendingResponse(
+        items=[_item_to_response(i) for i in items],
+        total=len(items),
+    )
+
+
 @router.get("/runs/{run_id}/queue", response_model=QueueListResponse)
 def list_queue(
     run_id: str,
