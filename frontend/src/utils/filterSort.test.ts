@@ -83,21 +83,30 @@ describe("applyFilters", () => {
   it("filters by unverifiableOnly", () => {
     const filters: QueueFilters = { itemType: null, unverifiableOnly: true };
     const result = applyFilters(items, filters);
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("4");
+    // Items 1-3 have empty citations arrays (unverifiable by definition),
+    // item 4 has an explicitly unverifiable citation. Item 5 is grounded.
+    expect(result).toHaveLength(4);
+    expect(result.map((i) => i.id).sort()).toEqual(["1", "2", "3", "4"]);
+  });
+
+  it("treats an empty citations array as unverifiable (regression: run eef332ea)", () => {
+    const filters: QueueFilters = { itemType: null, unverifiableOnly: true };
+    const result = applyFilters(items, filters);
+    expect(result.map((i) => i.id)).toContain("1");
   });
 
   it("combines item_type and unverifiableOnly filters (AND logic)", () => {
     const filters: QueueFilters = { itemType: "finding", unverifiableOnly: true };
     const result = applyFilters(items, filters);
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("4");
+    expect(result).toHaveLength(2);
+    expect(result.map((i) => i.id).sort()).toEqual(["1", "4"]);
   });
 
-  it("returns empty array when no items match combined filters", () => {
+  it("returns only empty-citation conflicts when combined filters match", () => {
     const filters: QueueFilters = { itemType: "conflict", unverifiableOnly: true };
     const result = applyFilters(items, filters);
-    expect(result).toHaveLength(0);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("2");
   });
 
   it("does not mutate the input array", () => {

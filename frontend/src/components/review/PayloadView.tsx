@@ -47,9 +47,15 @@ export function PayloadView({ item }: PayloadViewProps) {
           </span>
           <span className="inline-flex items-center gap-1.5 text-[11px] text-white/50">
             <span className={`h-1.5 w-1.5 rounded-full ${
-              item.status === "approved" ? "bg-emerald-400" : item.status === "rejected" ? "bg-rose-400" : "bg-white/30"
+              item.status === "approved"
+                ? "bg-emerald-400"
+                : item.status === "rejected"
+                  ? "bg-rose-400"
+                  : item.status === "approved_needs_recheck"
+                    ? "bg-amber-400"
+                    : "bg-white/30"
             }`} aria-hidden="true" />
-            {item.status}
+            {item.status === "approved_needs_recheck" ? "approved · needs recheck" : item.status}
           </span>
           <span className="text-xs text-white/40 uppercase tracking-wider">
             Queued: {formattedDate}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
 import { applyFilters, applySorting } from "./filterSort";
+import { itemIsUnverifiable } from "./citationHelpers";
 import type {
   QueueItem,
   QueueFilters,
@@ -55,17 +56,14 @@ const queueFiltersArb: fc.Arbitrary<QueueFilters> = fc.record({
 const sortFieldArb: fc.Arbitrary<SortField> = fc.constantFrom("item_type", "queued_at");
 const sortDirectionArb: fc.Arbitrary<"asc" | "desc"> = fc.constantFrom("asc", "desc");
 
-// --- Helper predicates (mirror the implementation logic for verification) ---
+// --- Helper predicates (use the single shared unverifiable definition) ---
 
 function matchesFilter(item: QueueItem, filters: QueueFilters): boolean {
   if (filters.itemType !== null && item.item_type !== filters.itemType) {
     return false;
   }
-  if (filters.unverifiableOnly) {
-    const hasUnverifiable = item.payload.source_citations.some(
-      (c) => c.citation_status === "unverifiable"
-    );
-    if (!hasUnverifiable) return false;
+  if (filters.unverifiableOnly && !itemIsUnverifiable(item.payload.source_citations)) {
+    return false;
   }
   return true;
 }

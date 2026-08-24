@@ -29,6 +29,10 @@ class ItemStatus(str, Enum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    # Flagged retroactively by migration 015: item was approved before the
+    # zero/null-citation gap was fixed, so the approval lacks traceable
+    # evidence and must be re-reviewed. Not a normal decide() target.
+    APPROVED_NEEDS_RECHECK = "approved_needs_recheck"
 
 
 class DecisionValue(str, Enum):
@@ -199,10 +203,52 @@ class ApprovalService:
     """High-level operations on the approval queue.
 
     Wraps the store with validation and convenience methods.
+
+    An optional ``decision_listener`` (set via :meth:`set_decision_listener`)
+    is invoked after every successful decision so state changes reach the
+    audit trail regardless of caller (REST, MCP, service layer).
     """
 
     def __init__(self, store: ApprovalStore) -> None:
         self._store = store
+        self._decision_listener: Optional[Any] = None
+
+    def set_decision_listener(
+        self,
+        listener: Any,
+    ) -> None:
+        """Register a callable invoked after each successful decision.
+
+        Signature: ``(item_id, run_id, decision_str, reviewer_id,
+        justification) -> None``. Listener exceptions are swallowed and
+        logged — auditing must never break deciding.
+        """
+        self._decision_listener = listener
+
+    def _notify_decision(
+        self,
+        item_id: str,
+        item: QueueItem,
+        decision: DecisionValue,
+        reviewer_id: str,
+        justification: str,
+    ) -> None:
+        if self._decision_listener is None:
+            return
+        import logging
+
+        try:
+            self._decision_listener(
+                item_id,
+                item.run_id,
+                decision.value,
+                reviewer_id,
+                justification,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Decision listener failed for item %s", item_id
+            )
 
     def enqueue_item(
         self,
@@ -257,6 +303,9 @@ class ApprovalService:
                 decision=decision,
                 reviewer_id=reviewer_id,
                 justification=justification,
+            )
+            self._notify_decision(
+                item_id, item, decision, reviewer_id, justification
             )
             return DecisionResult(
                 item_id=item_id,

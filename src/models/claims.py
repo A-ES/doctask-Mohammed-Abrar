@@ -34,6 +34,12 @@ class Claim(Base):
     extracted_at: Mapped[datetime] = mapped_column(
         server_default=text("NOW()"), nullable=False
     )
+    # Document fact view: the extractor's field name and how it was
+    # extracted ('structured' | 'llm' | 'llm_fallback' | 'regex_fallback').
+    field_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    extraction_method: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True
+    )
 
     # Relationships
     source_locations: Mapped[list["SourceLocation"]] = relationship(

@@ -1,4 +1,5 @@
 import { QueueItem, ItemType } from "@/types/review";
+import { itemIsUnverifiable } from "@/utils/citationHelpers";
 
 export interface QueueItemCardProps {
   item: QueueItem;
@@ -66,24 +67,37 @@ function TypeIcon({ type, className }: { type: ItemType; className?: string }) {
 }
 
 function StatusDot({ status }: { status: string }) {
+  const isRecheck = status === "approved_needs_recheck";
+
   const dotColor =
     status === "approved"
       ? "bg-emerald-400 shadow-emerald-400/50"
       : status === "rejected"
         ? "bg-rose-400 shadow-rose-400/50"
-        : "bg-white/30";
+        : isRecheck
+          ? "bg-amber-400 shadow-amber-400/50"
+          : "bg-white/30";
 
   const textColor =
     status === "approved"
       ? "text-emerald-400"
       : status === "rejected"
         ? "text-rose-400 line-through"
-        : "text-white/60";
+        : isRecheck
+          ? "text-amber-300"
+          : "text-white/60";
 
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[11px] ${textColor}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 text-[11px] ${textColor}`}
+      title={
+        isRecheck
+          ? "Approved with zero/null citations — flagged for re-review (migration 015)"
+          : undefined
+      }
+    >
       <span className={`h-1.5 w-1.5 rounded-full ${dotColor} shadow-sm`} aria-hidden="true" />
-      {status}
+      {isRecheck ? "approved · needs recheck" : status}
     </span>
   );
 }
@@ -101,9 +115,7 @@ export function QueueItemCard({
   const typeStyle = TYPE_COLORS[item.item_type];
   const selectedStyle = isSelected ? TYPE_SELECTED[item.item_type] : "";
 
-  const hasUnverifiable = item.payload.source_citations.some(
-    (c) => c.citation_status === "unverifiable"
-  );
+  const hasUnverifiable = itemIsUnverifiable(item.payload.source_citations);
 
   return (
     <div

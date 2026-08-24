@@ -258,6 +258,62 @@ function ItemCard({ item, onDecision }: { item: QueueItem; onDecision: (id: stri
 
 // ─── Node Details Display ────────────────────────────────────────────────────
 
+function ErrorRetryBanner({ details }: { details: any }) {
+  const hasError = details.error_detail || details.status === 'error' || details.status === 'failed';
+  const hasRetries = (details.retry_count ?? 0) > 0;
+  const hasSkip = !!details.skip_reason;
+
+  if (!hasError && !hasRetries && !hasSkip) return null;
+
+  return (
+    <div className="space-y-1.5">
+      {hasError && (
+        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2">
+          <div className="flex items-center gap-1.5 mb-1">
+            <svg className="w-3.5 h-3.5 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path d="M12 9v4m0 3h.01M12 3l9.5 16.5H2.5L12 3z" />
+            </svg>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-rose-300">
+              {details.error_type === 'transient' ? 'Transient Error' : 'Permanent Error'}
+            </span>
+          </div>
+          <p className="text-[11px] text-rose-200/80 leading-snug">{details.error_detail}</p>
+        </div>
+      )}
+      {hasRetries && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 flex items-center gap-2">
+          <svg className="w-3.5 h-3.5 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path d="M1 4v6h6M23 20v-6h-6" />
+            <path d="M20.49 9A9 9 0 015.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
+          </svg>
+          <span className="text-[11px] text-amber-200/80">Retried {details.retry_count} time{details.retry_count > 1 ? 's' : ''}</span>
+        </div>
+      )}
+      {hasSkip && (
+        <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 flex items-center gap-2">
+          <svg className="w-3.5 h-3.5 text-amber-400/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+          </svg>
+          <span className="text-[11px] text-amber-200/70">Skipped: {details.skip_reason?.replace(/_/g, ' ')}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MethodBadge({ method }: { method: string }) {
+  const colors = method === 'llm'
+    ? 'bg-violet-500/15 text-violet-300 border-violet-500/30'
+    : method === 'structured' || method === 'regex_fallback'
+      ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+      : 'bg-white/10 text-white/50 border-white/20';
+  return (
+    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-mono uppercase border ${colors}`}>
+      {method.replace(/_/g, ' ')}
+    </span>
+  );
+}
+
 function NodeDetailsSection({ details }: { details: any }) {
   if (!details || details.status === 'running') return null;
 
@@ -266,6 +322,7 @@ function NodeDetailsSection({ details }: { details: any }) {
     ? `${details.input_tokens ?? 0} in / ${details.output_tokens ?? 0} out`
     : null;
   const cost = details.cost_usd != null ? `$${details.cost_usd.toFixed(4)}` : null;
+  const nodeId = details.node_id;
 
   return (
     <div className="rounded-lg border border-white/[0.06] bg-[#141927]/60 overflow-hidden">
@@ -274,7 +331,7 @@ function NodeDetailsSection({ details }: { details: any }) {
         <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider border ${
           details.status === 'completed' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
           details.status === 'skipped' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
-          details.status === 'error' ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' :
+          details.status === 'error' || details.status === 'failed' ? 'bg-rose-500/20 text-rose-300 border-rose-500/30' :
           'bg-white/10 text-white/50 border-white/20'
         }`}>{details.status}</span>
         <span className="text-[10px] text-white/40 font-mono">{duration}</span>
@@ -282,39 +339,72 @@ function NodeDetailsSection({ details }: { details: any }) {
         {cost && <span className="text-[10px] text-violet-300/70 font-mono">{cost}</span>}
       </div>
 
-      {/* Node-specific content */}
-      <div className="p-3 space-y-2">
-        {/* Ingest */}
-        {details.mime_type && (
-          <DetailRow label="MIME Type" value={details.mime_type} />
-        )}
-        {details.file_size != null && (
-          <DetailRow label="File Size" value={`${(details.file_size / 1024).toFixed(1)} KB`} />
-        )}
+      {/* Error / Retry / Skip banner */}
+      <div className="p-3 space-y-3">
+        <ErrorRetryBanner details={details} />
 
-        {/* Extract Text */}
-        {details.text_length != null && (
-          <DetailRow label="Extracted Text" value={`${details.text_length.toLocaleString()} characters`} />
-        )}
-        {details.extracted_text_preview && (
-          <div className="mt-2 rounded-md bg-[#0a0d16] border border-white/[0.04] p-2 max-h-[200px] overflow-y-auto">
-            <pre className="text-[11px] text-white/50 whitespace-pre-wrap font-mono leading-relaxed">
-              {details.extracted_text_preview.slice(0, 500)}
-              {details.extracted_text_preview.length > 500 ? '...' : ''}
-            </pre>
+        {/* ── Ingest ────────────────────────────────────────────────────── */}
+        {nodeId === 'ingest' && (
+          <div className="space-y-1.5">
+            {details.mime_type && <DetailRow label="MIME Type" value={details.mime_type} />}
+            {details.file_size != null && <DetailRow label="File Size" value={`${(details.file_size / 1024).toFixed(1)} KB`} />}
+            {details.pile_document_count != null && details.pile_document_count > 0 && (
+              <DetailRow label="Documents in Pile" value={`${details.pile_document_count}`} />
+            )}
+            {details.document_id && (
+              <DetailRow label="Primary Document" value={details.document_id.slice(0, 8) + '...'} />
+            )}
           </div>
         )}
 
-        {/* Classify */}
-        {details.classification_label && (
-          <div className="space-y-1">
-            <DetailRow label="Classification" value={details.classification_label.replace(/_/g, ' ')} />
-            <DetailRow label="Confidence" value={`${((details.classification_confidence ?? 0) * 100).toFixed(0)}%`} />
+        {/* ── Extract Text ──────────────────────────────────────────────── */}
+        {nodeId === 'extract_text' && (
+          <div className="space-y-1.5">
+            {details.text_length != null && (
+              <DetailRow label="Characters" value={details.text_length.toLocaleString()} />
+            )}
+            {details.estimated_page_count != null && (
+              <DetailRow label="Estimated Pages" value={`${details.estimated_page_count}`} />
+            )}
+            {details.mime_type && <DetailRow label="Source Format" value={details.mime_type} />}
+            {details.document_id && (
+              <DetailRow label="Document" value={details.document_id.slice(0, 8) + '...'} />
+            )}
+            {details.extracted_text_preview && (
+              <div className="mt-2 rounded-md bg-[#0a0d16] border border-white/[0.04] p-2 max-h-[200px] overflow-y-auto">
+                <pre className="text-[11px] text-white/50 whitespace-pre-wrap font-mono leading-relaxed">
+                  {details.extracted_text_preview.slice(0, 500)}
+                  {details.extracted_text_preview.length > 500 ? '...' : ''}
+                </pre>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Classify ──────────────────────────────────────────────────── */}
+        {nodeId === 'classify_document' && (
+          <div className="space-y-1.5">
+            {details.classification_label && (
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wider text-white/30">Classification</span>
+                <span className="text-[12px] text-white/90 font-semibold capitalize">{details.classification_label.replace(/_/g, ' ')}</span>
+              </div>
+            )}
+            {details.classification_confidence != null && (
+              <DetailRow label="Confidence" value={`${((details.classification_confidence ?? 0) * 100).toFixed(0)}%`} />
+            )}
+            {details.classification_method && (
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wider text-white/30">Method</span>
+                <MethodBadge method={details.classification_method} />
+              </div>
+            )}
             {details.classification_scores && (
-              <div className="mt-1.5 space-y-1">
+              <div className="mt-2 space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Score Distribution</span>
                 {Object.entries(details.classification_scores).map(([label, score]) => (
                   <div key={label} className="flex items-center gap-2">
-                    <span className="text-[10px] text-white/30 w-32 truncate">{label.replace(/_/g, ' ')}</span>
+                    <span className="text-[10px] text-white/40 w-36 truncate capitalize">{label.replace(/_/g, ' ')}</span>
                     <div className="flex-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
                       <div
                         className="h-full rounded-full bg-indigo-500/60"
@@ -329,108 +419,244 @@ function NodeDetailsSection({ details }: { details: any }) {
           </div>
         )}
 
-        {/* Chunk */}
-        {details.chunk_count != null && (
-          <DetailRow label="Chunks" value={`${details.chunk_count} segments`} />
-        )}
-        {details.chunks_preview && details.chunks_preview.length > 0 && (
-          <div className="space-y-1 mt-1">
-            {details.chunks_preview.map((c: any) => (
-              <div key={c.index} className="rounded bg-[#0a0d16] border border-white/[0.04] px-2 py-1.5">
-                <span className="text-[9px] text-white/30 font-mono">chunk {c.index} · {c.length} chars</span>
-                <p className="text-[10px] text-white/40 mt-0.5 truncate">{c.text_preview}</p>
+        {/* ── Chunk ─────────────────────────────────────────────────────── */}
+        {nodeId === 'chunk' && (
+          <div className="space-y-1.5">
+            <DetailRow label="Chunks" value={`${details.chunk_count ?? 0} segments`} />
+            {details.chunk_max_size && <DetailRow label="Max Size" value={`${details.chunk_max_size} chars`} />}
+            {details.chunk_overlap != null && <DetailRow label="Overlap" value={`${details.chunk_overlap} chars`} />}
+            {details.chunks_preview && details.chunks_preview.length > 0 && (
+              <div className="space-y-1 mt-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Chunk Boundaries</span>
+                {details.chunks_preview.map((c: any) => (
+                  <div key={c.index} className="rounded bg-[#0a0d16] border border-white/[0.04] px-2 py-1.5">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-[9px] text-white/30 font-mono">#{c.index}</span>
+                      <span className="text-[9px] text-white/20">offset {c.start_offset}–{c.end_offset}</span>
+                      <span className="text-[9px] text-white/20 ml-auto">{c.length} chars</span>
+                    </div>
+                    <p className="text-[10px] text-white/40 truncate">{c.text_preview}</p>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* Claims */}
-        {details.claim_count != null && (
-          <DetailRow label="Claims Extracted" value={`${details.claim_count}`} />
-        )}
-        {details.claims && details.claims.length > 0 && (
-          <div className="space-y-1.5 mt-1">
-            {details.claims.slice(0, 10).map((claim: any) => (
-              <div key={claim.claim_id} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-2">
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  <span className="text-[9px] font-mono text-indigo-300/60">{claim.claim_id}</span>
-                  <span className={`text-[9px] px-1 rounded ${
-                    claim.confidence >= 0.8 ? 'bg-emerald-500/20 text-emerald-300' :
-                    claim.confidence >= 0.5 ? 'bg-amber-500/20 text-amber-300' :
-                    'bg-rose-500/20 text-rose-300'
-                  }`}>{(claim.confidence * 100).toFixed(0)}%</span>
-                </div>
-                <p className="text-[11px] text-white/60 leading-snug">{claim.claim_text}</p>
-              </div>
-            ))}
-            {details.claims.length > 10 && (
-              <p className="text-[10px] text-white/30 text-center">+{details.claims.length - 10} more claims</p>
             )}
           </div>
         )}
 
-        {/* Verdicts */}
-        {details.verdicts && details.verdicts.length > 0 && (
-          <div className="space-y-1.5 mt-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Verdicts</span>
-            {details.verdicts.slice(0, 10).map((v: any, i: number) => (
-              <div key={i} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-mono text-white/40">{v.claim_id}</span>
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                    v.verdict === 'compliant' ? 'bg-emerald-500/20 text-emerald-300' :
-                    v.verdict === 'non_compliant' ? 'bg-rose-500/20 text-rose-300' :
-                    'bg-amber-500/20 text-amber-300'
-                  }`}>{v.verdict}</span>
-                  {v.rule_id && <span className="text-[9px] text-white/30">{v.rule_id}</span>}
-                </div>
-              </div>
-            ))}
+        {/* ── Embed ─────────────────────────────────────────────────────── */}
+        {nodeId === 'embed' && (
+          <div className="space-y-1.5">
+            <DetailRow label="Vectors Stored" value={`${details.vector_count ?? 0}`} />
+            <DetailRow label="Model" value={details.embedding_model ?? 'none'} />
+            <DetailRow label="Stored" value={details.embeddings_stored ? 'Yes' : 'No (skipped)'} />
           </div>
         )}
 
-        {/* Findings */}
-        {details.findings && details.findings.length > 0 && (
-          <div className="space-y-1.5 mt-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
-              Findings ({details.finding_count ?? details.findings.length})
-            </span>
-            {details.findings.slice(0, 8).map((f: any, i: number) => (
-              <div key={i} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-2">
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  {f.severity && (
-                    <span className={`text-[9px] px-1 rounded font-bold uppercase ${
-                      f.severity === 'high' ? 'bg-rose-500/20 text-rose-300' :
-                      f.severity === 'medium' ? 'bg-amber-500/20 text-amber-300' :
-                      'bg-white/10 text-white/50'
-                    }`}>{f.severity}</span>
-                  )}
-                  {f.finding_type && <span className="text-[9px] text-white/30">{f.finding_type}</span>}
-                  {f.rule_id && <span className="text-[9px] text-indigo-300/60">{f.rule_id}</span>}
+        {/* ── Extract Claims ────────────────────────────────────────────── */}
+        {nodeId === 'extract_claims' && (
+          <div className="space-y-1.5">
+            <DetailRow label="Facts Extracted" value={`${details.claim_count ?? 0}`} />
+            {details.extraction_method_counts && Object.keys(details.extraction_method_counts).length > 0 && (
+              <div className="mt-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">By Extraction Method</span>
+                <div className="mt-1 space-y-1">
+                  {Object.entries(details.extraction_method_counts).map(([method, count]) => (
+                    <div key={method} className="flex items-center justify-between">
+                      <MethodBadge method={method} />
+                      <span className="text-[11px] text-white/60 font-mono">{count as number}</span>
+                    </div>
+                  ))}
                 </div>
-                <p className="text-[11px] text-white/60">{f.description || f.reason || '—'}</p>
               </div>
-            ))}
+            )}
+            {details.claims && details.claims.length > 0 && (
+              <div className="space-y-1.5 mt-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Claims</span>
+                {details.claims.slice(0, 8).map((claim: any) => (
+                  <div key={claim.claim_id} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="text-[9px] font-mono text-indigo-300/60">{claim.claim_id}</span>
+                      {claim._extraction_method && <MethodBadge method={claim._extraction_method} />}
+                      <span className={`text-[9px] px-1 rounded ml-auto ${
+                        claim.confidence >= 0.8 ? 'bg-emerald-500/20 text-emerald-300' :
+                        claim.confidence >= 0.5 ? 'bg-amber-500/20 text-amber-300' :
+                        'bg-rose-500/20 text-rose-300'
+                      }`}>{((claim.confidence ?? 0) * 100).toFixed(0)}%</span>
+                    </div>
+                    <p className="text-[11px] text-white/60 leading-snug">{claim.claim_text}</p>
+                  </div>
+                ))}
+                {details.claims.length > 8 && (
+                  <p className="text-[10px] text-white/30 text-center">+{details.claims.length - 8} more claims</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        {/* Queue buckets */}
-        {details.queue_buckets && (
-          <div className="space-y-1 mt-1">
+        {/* ── Match Rules / Match Sources ───────────────────────────────── */}
+        {(nodeId === 'match_rules' || nodeId === 'match_rules_against_sources') && (
+          <div className="space-y-1.5">
+            <DetailRow label="Findings" value={`${details.finding_count ?? 0}`} />
+            {details.evaluation_method && (
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wider text-white/30">Evaluation</span>
+                <MethodBadge method={details.evaluation_method} />
+              </div>
+            )}
+            {details.evaluation_method_counts && Object.keys(details.evaluation_method_counts).length > 0 && (
+              <div className="mt-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Findings by Method</span>
+                <div className="mt-1 space-y-1">
+                  {Object.entries(details.evaluation_method_counts).map(([method, count]) => (
+                    <div key={method} className="flex items-center justify-between">
+                      <MethodBadge method={method} />
+                      <span className="text-[11px] text-white/60 font-mono">{count as number}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {details.verdict_counts && Object.keys(details.verdict_counts).length > 0 && (
+              <div className="mt-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Verdict Summary</span>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {Object.entries(details.verdict_counts).map(([verdict, count]) => (
+                    <span key={verdict} className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium border ${
+                      verdict === 'compliant' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' :
+                      verdict === 'non_compliant' ? 'bg-rose-500/15 text-rose-300 border-rose-500/30' :
+                      'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                    }`}>
+                      {verdict.replace(/_/g, ' ')} <span className="font-mono">{count as number}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {details.verdicts && details.verdicts.length > 0 && (
+              <div className="space-y-1.5 mt-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Verdicts</span>
+                {details.verdicts.slice(0, 8).map((v: any, i: number) => (
+                  <div key={i} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-mono text-white/40">{v.claim_id}</span>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                        v.verdict === 'compliant' ? 'bg-emerald-500/20 text-emerald-300' :
+                        v.verdict === 'non_compliant' ? 'bg-rose-500/20 text-rose-300' :
+                        'bg-amber-500/20 text-amber-300'
+                      }`}>{v.verdict}</span>
+                      {v.rule_id && <span className="text-[9px] text-indigo-300/60">{v.rule_id}</span>}
+                    </div>
+                    {v.reason && <p className="text-[10px] text-white/40 mt-0.5">{v.reason}</p>}
+                  </div>
+                ))}
+                {details.verdicts.length > 8 && (
+                  <p className="text-[10px] text-white/30 text-center">+{details.verdicts.length - 8} more</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Merge Findings ────────────────────────────────────────────── */}
+        {nodeId === 'merge_findings' && (
+          <div className="space-y-1.5">
+            <DetailRow label="Merged Findings" value={`${details.finding_count ?? 0}`} />
+            {details.findings && details.findings.length > 0 && (
+              <div className="space-y-1 mt-1.5">
+                {details.findings.slice(0, 6).map((f: any, i: number) => (
+                  <div key={i} className="rounded-md bg-[#0a0d16] border border-white/[0.04] px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      {f.severity && (
+                        <span className={`text-[9px] px-1 rounded font-bold uppercase ${
+                          f.severity === 'high' ? 'bg-rose-500/20 text-rose-300' :
+                          f.severity === 'medium' ? 'bg-amber-500/20 text-amber-300' :
+                          'bg-white/10 text-white/50'
+                        }`}>{f.severity}</span>
+                      )}
+                      {f.rule_id && <span className="text-[9px] text-indigo-300/60">{f.rule_id}</span>}
+                    </div>
+                    <p className="text-[11px] text-white/60">{f.description || f.reason || '—'}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Score Confidence ──────────────────────────────────────────── */}
+        {nodeId === 'score_confidence' && (
+          <div className="space-y-1.5">
+            <DetailRow label="Verdicts Scored" value={`${(details.verdicts ?? []).length}`} />
+            {details.verdicts && details.verdicts.length > 0 && (
+              <div className="space-y-1 mt-1.5">
+                {details.verdicts.slice(0, 6).map((v: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 px-2 py-1 rounded bg-[#0a0d16] border border-white/[0.04]">
+                    <span className="text-[9px] font-mono text-white/40">{v.claim_id}</span>
+                    <span className={`text-[9px] px-1 rounded ${
+                      v.confidence >= 0.8 ? 'bg-emerald-500/20 text-emerald-300' :
+                      v.confidence >= 0.5 ? 'bg-amber-500/20 text-amber-300' :
+                      'bg-rose-500/20 text-rose-300'
+                    }`}>{((v.confidence ?? 0) * 100).toFixed(0)}%</span>
+                    {v.needs_human_review && <span className="text-[9px] text-amber-300/60">needs review</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Route to Queue ────────────────────────────────────────────── */}
+        {nodeId === 'route_to_queue' && (
+          <div className="space-y-1.5">
             <DetailRow label="Auto-approve" value={`${details.auto_approve_count ?? 0} claims`} />
             <DetailRow label="Escalated" value={`${details.escalate_count ?? 0} claims`} />
             <DetailRow label="Auto-reject" value={`${details.auto_reject_count ?? 0} claims`} />
+            {details.confidence_threshold != null && (
+              <DetailRow label="Threshold" value={`${(details.confidence_threshold * 100).toFixed(0)}%`} />
+            )}
+            {details.routing_reasons && details.routing_reasons.length > 0 && (
+              <div className="mt-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">Escalation Reasons</span>
+                <div className="mt-1 space-y-1">
+                  {details.routing_reasons.slice(0, 8).map((r: any, i: number) => (
+                    <div key={i} className="flex items-center gap-2 px-2 py-1 rounded bg-[#0a0d16] border border-white/[0.04]">
+                      <span className="text-[9px] font-mono text-white/40">{r.claim_id}</span>
+                      <span className="text-[10px] text-amber-200/70">{r.reason?.replace(/_/g, ' ')}</span>
+                    </div>
+                  ))}
+                  {details.routing_reasons.length > 8 && (
+                    <p className="text-[10px] text-white/30 text-center">+{details.routing_reasons.length - 8} more</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Decisions */}
-        {details.decision_count != null && (
-          <DetailRow label="Decisions" value={`${details.decision_count}`} />
+        {/* ── Human Review ──────────────────────────────────────────────── */}
+        {nodeId === 'human_review' && (
+          <div className="space-y-1.5">
+            <DetailRow label="Decisions Made" value={`${details.decision_count ?? 0}`} />
+            {details.decisions && details.decisions.length > 0 && (
+              <div className="space-y-1 mt-1.5">
+                {details.decisions.slice(0, 6).map((d: any, i: number) => (
+                  <div key={i} className="flex items-center gap-2 px-2 py-1 rounded bg-[#0a0d16] border border-white/[0.04]">
+                    <span className="text-[9px] font-mono text-white/40">{d.claim_id}</span>
+                    <span className={`text-[9px] px-1.5 rounded font-bold uppercase ${
+                      d.decision_value === 'approved' ? 'bg-emerald-500/20 text-emerald-300' :
+                      'bg-rose-500/20 text-rose-300'
+                    }`}>{d.decision_value}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
-        {/* Finalize */}
-        {details.final_status && (
-          <div className="space-y-1">
+        {/* ── Finalize ──────────────────────────────────────────────────── */}
+        {nodeId === 'finalize' && (
+          <div className="space-y-1.5">
             <DetailRow label="Total Claims" value={`${details.total_claims ?? 0}`} />
             <DetailRow label="Total Findings" value={`${details.total_findings ?? 0}`} />
           </div>

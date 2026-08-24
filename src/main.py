@@ -25,7 +25,7 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 # Load environment variables from .env
 load_dotenv()
@@ -34,8 +34,9 @@ from src.database import SessionLocal, engine
 from src.models.documents import Document, DocumentVersion
 from src.models.piles import Pile, PileDocument
 from src.models.runs import Run, RunStep
-from src.pipeline.approval import ApprovalService, InMemoryApprovalStore
+from src.pipeline.approval import ApprovalService
 from src.pipeline.approval_api import router as approval_router, set_approval_service
+from src.pipeline.approval_postgres import PostgresApprovalStore
 from src.pipeline.api import router as runs_router
 from src.pipeline.incremental_api import (
     router as incremental_router,
@@ -88,15 +89,44 @@ async def broadcast_sse(run_id: str, data: dict) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup/shutdown lifecycle."""
-    # Initialize approval service with in-memory store
-    store = InMemoryApprovalStore()
+    # Initialize approval service with Postgres-backed store
+    # (durable across restarts via approval_queue/decisions tables).
+    store = PostgresApprovalStore(SessionLocal)
     service = ApprovalService(store)
     set_approval_service(service)
+    # Approval decisions land in the audit trail for /runs/{id}/history.
+    from src.pipeline.history_sql import emit_decision_event as _emit_decision
+
+    def _decision_listener(item_id, run_id, decision, reviewer_id, justification):
+        _emit_decision(
+            SessionLocal,
+            item_id=item_id,
+            run_id=run_id,
+            decision=decision,
+            reviewer_id=reviewer_id,
+            justification=justification,
+        )
+
+    service.set_decision_listener(_decision_listener)
+    # extract_claims node persists claims/source_locations at node
+    # completion (durable record); checkpoint JSONB stays for resumability.
+    from src.pipeline.nodes.extract_claims import set_claim_persister
+    from src.pipeline.source_linker import make_sql_claim_persister
+
+    set_claim_persister(make_sql_claim_persister(SessionLocal))
+
+    # Phase 5.2: history endpoint reads the audit_events table.
+    from src.pipeline.api import set_history_store
+    from src.pipeline.history_sql import SQLHistoryStore
+
+    set_history_store(SQLHistoryStore(SessionLocal))
     set_incremental_approval_service(service)
     logger.info("Application started. Approval service configured.")
     yield
     set_approval_service(None)
     set_incremental_approval_service(None)
+    set_claim_persister(None)
+    set_history_store(None)
     logger.info("Application shutdown.")
 
 
@@ -118,6 +148,8 @@ app.add_middleware(
 
 # Mount routers
 app.include_router(upload_router)
+from src.pipeline.facts_api import router as facts_router
+app.include_router(facts_router)
 app.include_router(approval_router)
 app.include_router(runs_router)
 app.include_router(piles_router)
@@ -163,6 +195,7 @@ class RunListItem(BaseModel):
     filename: Optional[str] = None
     pile_id: Optional[str] = None
     pile_name: Optional[str] = None
+    needs_recheck_count: int = 0
 
 
 @app.post("/runs/start", response_model=StartPipelineResponse)
@@ -378,6 +411,17 @@ async def list_runs() -> list[RunListItem]:
             select(Run).order_by(Run.started_at.desc()).limit(50)
         ).scalars().all()
 
+        # Count recheck-flagged queue items per run in one grouped query
+        recheck_counts: dict[str, int] = {}
+        recheck_rows = session.execute(
+            text(
+                "SELECT run_id, count(*) FROM approval_queue "
+                "WHERE status = 'approved_needs_recheck' AND run_id IS NOT NULL "
+                "GROUP BY run_id"
+            )
+        ).fetchall()
+        recheck_counts = {str(row[0]): int(row[1]) for row in recheck_rows}
+
         results = []
         for run in runs:
             doc_id = run.config_snapshot.get("document_id") if run.config_snapshot else None
@@ -407,6 +451,7 @@ async def list_runs() -> list[RunListItem]:
                 filename=filename,
                 pile_id=pile_id_str,
                 pile_name=pile_name,
+                needs_recheck_count=recheck_counts.get(str(run.id), 0),
             ))
         return results
     finally:
@@ -507,7 +552,7 @@ async def get_node_details(run_id: str, node_id: str) -> dict:
     """Get detailed output from a specific pipeline node.
 
     Returns the node's execution details including duration, token usage,
-    and relevant output data (claims, verdicts, findings, etc.).
+    retry/skip info, and relevant output data (claims, verdicts, findings, etc.).
     """
     session = SessionLocal()
     try:
@@ -535,28 +580,93 @@ async def get_node_details(run_id: str, node_id: str) -> dict:
             "ended_at": step.ended_at.isoformat() if step.ended_at else None,
         }
 
-        # Add node-specific output data
-        if node_id == "extract_text":
+        # ── Common: retry, error, skip info ──────────────────────────────
+        details["retry_count"] = output.get("retries", {}).get(node_id, 0)
+        details["error_detail"] = output.get("error_detail")
+        details["error_type"] = output.get("error_type")
+
+        # Find skip reason for this node
+        skip_reason = None
+        for sn in output.get("skipped_nodes", []):
+            if isinstance(sn, dict) and sn.get("node_name") == node_id:
+                skip_reason = sn.get("reason")
+                break
+        details["skip_reason"] = skip_reason
+
+        # ── Per-node specific output ─────────────────────────────────────
+        if node_id == "ingest":
+            details["mime_type"] = output.get("mime_type")
+            raw = output.get("raw_content")
+            details["file_size"] = len(raw) if raw else None
+            # Per-document status from pile run
+            pile_doc_ids = output.get("config", {}).get("pile_document_ids", [])
+            if not pile_doc_ids:
+                # Check the config_snapshot on the run itself
+                run = session.execute(
+                    select(Run).where(Run.id == uuid.UUID(run_id))
+                ).scalar_one_or_none()
+                if run and run.config_snapshot:
+                    pile_doc_ids = run.config_snapshot.get("pile_document_ids", [])
+            details["pile_document_count"] = len(pile_doc_ids)
+            details["document_id"] = output.get("document_id")
+
+        elif node_id == "extract_text":
             text = output.get("extracted_text", "")
             details["extracted_text_preview"] = text[:2000] if text else None
             details["text_length"] = len(text) if text else 0
+            # Estimate page count (~3000 chars per page for plain text)
+            details["estimated_page_count"] = max(1, (len(text) + 2999) // 3000) if text else 0
+            # Per-document status (for pile runs, ingest handles one doc at a time currently)
+            details["document_id"] = output.get("document_id")
+            details["mime_type"] = output.get("mime_type")
 
         elif node_id == "classify_document":
             details["classification_label"] = output.get("classification_label")
             details["classification_confidence"] = output.get("classification_confidence")
             details["classification_scores"] = output.get("classification_scores")
+            # Reasoning: if LLM was used (tokens > 0) it's LLM-based; otherwise keyword fallback
+            if (step.input_tokens or 0) > 0:
+                details["classification_method"] = "llm"
+            else:
+                details["classification_method"] = "keyword_fallback"
 
         elif node_id == "chunk":
             chunks = output.get("chunks", [])
             details["chunk_count"] = len(chunks)
+            # Config used
+            config = output.get("config", {})
+            details["chunk_max_size"] = config.get("chunk_max_size")
+            details["chunk_overlap"] = config.get("chunk_overlap")
+            # Sample boundaries (first 5 chunks with start/end offsets)
             details["chunks_preview"] = [
-                {"index": c.get("index"), "length": len(c.get("text", "")), "text_preview": c.get("text", "")[:100]}
+                {
+                    "index": c.get("index"),
+                    "length": len(c.get("text", "")),
+                    "start_offset": c.get("start_offset"),
+                    "end_offset": c.get("end_offset"),
+                    "text_preview": c.get("text", "")[:120],
+                }
                 for c in chunks[:5]
             ]
+
+        elif node_id == "embed":
+            details["embeddings_stored"] = output.get("embeddings_stored", False)
+            # Model info from environment
+            details["embedding_model"] = os.environ.get("EMBEDDING_MODEL", "none (skipped)")
+            details["vector_count"] = 0  # Currently skipped; would be chunk count
+            chunks = output.get("chunks", [])
+            if output.get("embeddings_stored"):
+                details["vector_count"] = len(chunks)
 
         elif node_id == "extract_claims":
             claims = output.get("claims", [])
             details["claim_count"] = len(claims)
+            # Count by extraction method
+            method_counts: dict[str, int] = {}
+            for claim in claims:
+                method = claim.get("_extraction_method", "llm")
+                method_counts[method] = method_counts.get(method, 0) + 1
+            details["extraction_method_counts"] = method_counts
             # Enrich claims with text snippet from the source chunks
             chunks = output.get("chunks", [])
             enriched_claims = []
@@ -565,15 +675,12 @@ async def get_node_details(run_id: str, node_id: str) -> dict:
                 chunk_idx = claim.get("chunk_index")
                 start = claim.get("start_offset", 0)
                 end = claim.get("end_offset", 0)
-                # Resolve snippet from the chunk text using offsets
                 if chunks and chunk_idx is not None and 0 <= chunk_idx < len(chunks):
                     chunk_text = chunks[chunk_idx].get("text", "")
                     chunk_start = chunks[chunk_idx].get("start_offset", 0)
-                    # Offsets may be relative to chunk or to full doc — try both
                     if start < len(chunk_text) and end <= len(chunk_text):
                         snippet = chunk_text[start:end]
                     elif start >= chunk_start:
-                        # Offsets relative to full doc — adjust
                         local_start = start - chunk_start
                         local_end = end - chunk_start
                         if 0 <= local_start < len(chunk_text):
@@ -582,7 +689,6 @@ async def get_node_details(run_id: str, node_id: str) -> dict:
                             snippet = ""
                     else:
                         snippet = ""
-                    # Add surrounding context (30 chars before/after)
                     if snippet:
                         ctx_start = max(0, start - 30) if start < len(chunk_text) else max(0, (start - chunk_start) - 30)
                         ctx_end_pos = min(len(chunk_text), (end if end < len(chunk_text) else end - chunk_start) + 30)
@@ -595,8 +701,28 @@ async def get_node_details(run_id: str, node_id: str) -> dict:
             details["claims"] = enriched_claims
 
         elif node_id in ("match_rules", "match_rules_against_sources"):
-            details["verdicts"] = output.get("verdicts", [])
-            details["findings"] = output.get("claim_findings", []) if node_id == "match_rules" else output.get("source_findings", [])
+            verdicts = output.get("verdicts", [])
+            findings = output.get("claim_findings", []) if node_id == "match_rules" else output.get("source_findings", [])
+            details["verdicts"] = verdicts
+            details["findings"] = findings
+            details["finding_count"] = len(findings)
+            # Split findings by evaluation_method
+            eval_method_counts: dict[str, int] = {}
+            for f in findings:
+                method = f.get("evaluation_method", f.get("source", "llm"))
+                eval_method_counts[method] = eval_method_counts.get(method, 0) + 1
+            details["evaluation_method_counts"] = eval_method_counts
+            # Verdict summary
+            verdict_counts: dict[str, int] = {}
+            for v in verdicts:
+                vtype = v.get("verdict", "unknown")
+                verdict_counts[vtype] = verdict_counts.get(vtype, 0) + 1
+            details["verdict_counts"] = verdict_counts
+            # Was fallback used?
+            if (step.input_tokens or 0) > 0:
+                details["evaluation_method"] = "llm"
+            else:
+                details["evaluation_method"] = "fallback"
 
         elif node_id == "merge_findings":
             details["findings"] = output.get("findings", [])
@@ -611,6 +737,26 @@ async def get_node_details(run_id: str, node_id: str) -> dict:
             details["auto_approve_count"] = len(buckets.get("auto_approve", []))
             details["escalate_count"] = len(buckets.get("escalate", []))
             details["auto_reject_count"] = len(buckets.get("auto_reject", []))
+            # Show routing conditions for escalated items
+            verdicts = output.get("verdicts", [])
+            config = output.get("config", {})
+            threshold = config.get("confidence_threshold", 0.7)
+            details["confidence_threshold"] = threshold
+            routing_reasons: list[dict] = []
+            verdict_map = {v.get("claim_id"): v for v in verdicts}
+            for claim_id in buckets.get("escalate", []):
+                v = verdict_map.get(claim_id)
+                if v is None:
+                    routing_reasons.append({"claim_id": claim_id, "reason": "no_verdict_available"})
+                elif v.get("verdict") == "non_compliant":
+                    routing_reasons.append({"claim_id": claim_id, "reason": "non_compliant"})
+                elif v.get("needs_human_review"):
+                    routing_reasons.append({"claim_id": claim_id, "reason": "needs_human_review"})
+                elif v.get("confidence", 1.0) < threshold:
+                    routing_reasons.append({"claim_id": claim_id, "reason": f"low_confidence ({v.get('confidence', 0):.2f} < {threshold})"})
+                else:
+                    routing_reasons.append({"claim_id": claim_id, "reason": "escalated"})
+            details["routing_reasons"] = routing_reasons
 
         elif node_id == "human_review":
             details["decisions"] = output.get("decisions", [])
@@ -620,10 +766,6 @@ async def get_node_details(run_id: str, node_id: str) -> dict:
             details["final_status"] = "completed"
             details["total_claims"] = len(output.get("claims", []))
             details["total_findings"] = len(output.get("findings", []))
-
-        elif node_id == "ingest":
-            details["mime_type"] = output.get("mime_type")
-            details["file_size"] = len(output.get("raw_content", "")) if output.get("raw_content") else None
 
         return details
     finally:

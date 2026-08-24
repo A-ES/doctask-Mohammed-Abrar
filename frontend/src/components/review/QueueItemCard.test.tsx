@@ -182,4 +182,53 @@ describe("QueueItemCard", () => {
     );
     expect(screen.getByText("UPDATE")).toBeInTheDocument();
   });
+
+  // Regression: run eef332ea item 4a705e77 was approved with zero citations
+  // and rendered no unverifiable marker. The empty-array case specifically.
+  it("shows the unverifiable marker for citations: [] (empty array)", () => {
+    render(
+      <QueueItemCard
+        item={makeItem({
+          payload: { summary: "No citations at all", details: {}, source_citations: [] },
+        })}
+        isSelected={false}
+        isLoading={false}
+        onClick={() => {}}
+      />
+    );
+    const marker = screen.getByTitle("Has unverifiable citations");
+    expect(marker).toBeInTheDocument();
+    expect(marker).toHaveClass("warning-pulse");
+  });
+
+  it("hides the unverifiable marker when all citations are grounded with spans", () => {
+    render(
+      <QueueItemCard
+        item={makeItem({
+          payload: {
+            summary: "Grounded",
+            details: {},
+            source_citations: [
+              {
+                claim_id: "c1",
+                claim_text: "Grounded claim",
+                citation_status: "grounded",
+                source_location: {
+                  page_number: 1,
+                  section_id: "s1",
+                  start_offset: 0,
+                  end_offset: 10,
+                  clause_ref: null,
+                },
+              },
+            ],
+          },
+        })}
+        isSelected={false}
+        isLoading={false}
+        onClick={() => {}}
+      />
+    );
+    expect(screen.queryByTitle("Has unverifiable citations")).not.toBeInTheDocument();
+  });
 });

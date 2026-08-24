@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { getCitationLabel, isUnverifiable } from "./citationHelpers";
+import {
+  getCitationLabel,
+  isUnverifiable,
+  itemIsUnverifiable,
+} from "./citationHelpers";
 import type { SourceCitation } from "@/types/review";
 
 function makeCitation(
@@ -42,6 +46,40 @@ describe("isUnverifiable", () => {
   it("returns false when grounded with valid source_location", () => {
     const citation = makeCitation();
     expect(isUnverifiable(citation)).toBe(false);
+  });
+});
+
+describe("itemIsUnverifiable", () => {
+  it("returns true for an empty citations array (the live-found gap case)", () => {
+    expect(itemIsUnverifiable([])).toBe(true);
+  });
+
+  it("returns true when every citation has source_location null", () => {
+    const citations = [
+      makeCitation({ source_location: null }),
+      makeCitation({ citation_status: "unverifiable", source_location: null }),
+    ];
+    expect(itemIsUnverifiable(citations)).toBe(true);
+  });
+
+  it("returns true when every citation is flagged unverifiable", () => {
+    const citations = [
+      makeCitation({ citation_status: "unverifiable" }),
+      makeCitation({ citation_status: "unverifiable", source_location: null }),
+    ];
+    expect(itemIsUnverifiable(citations)).toBe(true);
+  });
+
+  it("returns false when at least one citation is grounded with a span", () => {
+    const citations = [
+      makeCitation(),
+      makeCitation({ claim_id: "claim-2", source_location: null }),
+    ];
+    expect(itemIsUnverifiable(citations)).toBe(false);
+  });
+
+  it("returns false when all citations are grounded with spans", () => {
+    expect(itemIsUnverifiable([makeCitation(), makeCitation()])).toBe(false);
   });
 });
 

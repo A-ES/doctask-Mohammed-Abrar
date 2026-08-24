@@ -326,10 +326,11 @@ export function ReportPanel({ runId, runStatus, onClose, open, onOpenApprovals }
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-white/40 mb-3">
                     Escalated Items — Approval Queue ({approvals!.total})
                   </h3>
-                  <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="grid grid-cols-4 gap-2 mb-3">
                     <MiniStat label="Pending" value={approvals!.pending} color="text-amber-400" />
                     <MiniStat label="Approved" value={approvals!.items.filter(i => i.status === 'approved').length} color="text-emerald-400" />
                     <MiniStat label="Rejected" value={approvals!.items.filter(i => i.status === 'rejected').length} color="text-rose-400" />
+                    <MiniStat label="Needs recheck" value={approvals!.items.filter(i => i.status === 'approved_needs_recheck').length} color="text-amber-300" />
                   </div>
                   <div className="space-y-1.5 max-h-[250px] overflow-y-auto">
                     {approvals!.items.map((item) => (

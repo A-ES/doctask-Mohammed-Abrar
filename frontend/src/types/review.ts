@@ -69,7 +69,11 @@ export interface RunSummary {
 
 // Utility types
 export type ItemType = "finding" | "conflict" | "proposed_update";
-export type ItemStatus = "pending" | "approved" | "rejected";
+export type ItemStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "approved_needs_recheck";
 export type SortField = "item_type" | "queued_at";
 
 export interface QueueFilters {

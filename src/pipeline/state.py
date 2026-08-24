@@ -154,6 +154,11 @@ class PipelineState(TypedDict):
     # Per-node cost/time metrics (populated by each node, consumed by executor)
     _last_node_metrics: Optional[NodeMetrics]
 
+    # Set when a durability write (claims/source_locations, audit_events)
+    # failed after one retry. The run then ends as
+    # 'completed_with_persistence_gap' instead of a plain 'completed'.
+    _persistence_gap: bool
+
 
 # --- Factory Function ---
 
@@ -220,4 +225,5 @@ def create_initial_state(
         decisions=[],
         # Per-node metrics (reset by executor before each node)
         _last_node_metrics=None,
+        _persistence_gap=False,
     )

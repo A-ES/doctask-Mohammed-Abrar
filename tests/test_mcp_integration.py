@@ -355,36 +355,58 @@ class TestMCPFullPileIntegration:
         assert "already" in re_decide_result["error"].lower()
 
         # ---------------------------------------------------------------
-        # Step 8: Add claims to deliverable (simulating pipeline assembly)
+        # Step 8: Persist a deliverable for the run (finalize-node behavior)
         # ---------------------------------------------------------------
-        deliverable: Deliverable = stores["deliverable"]
+        # The MCP get_deliverable tool reads the persisted `deliverables`
+        # table written by the finalize node — not the in-process registry.
+        from src.database import SessionLocal as _SessionLocal
+        from sqlalchemy import text as _text
 
-        deliverable.add_claim(SectionClaim(
-            claim_id=str(uuid.uuid4()),
-            claim_type="loan_agreement.interest_rate",
-            extracted_text="15% per annum",
-            confidence=0.92,
-            source_document_id=doc_id,
-        ))
-        deliverable.add_claim(SectionClaim(
-            claim_id=str(uuid.uuid4()),
-            claim_type="loan_agreement.tenure",
-            extracted_text="24 months",
-            confidence=0.88,
-            source_document_id=doc_id,
-        ))
-        deliverable.add_claim(SectionClaim(
-            claim_id=str(uuid.uuid4()),
-            claim_type="loan_agreement.interest_rate",
-            extracted_text="Compounded monthly",
-            confidence=0.85,
-            source_document_id=doc_id,
-        ))
+        from src.pipeline.deliverable_store import persist_deliverable
+
+        with _SessionLocal() as _s:
+            _s.execute(
+                _text(
+                    "INSERT INTO runs (id, status, initiator, config_snapshot) "
+                    "VALUES (:id, 'running', 'mcp-test', '{}'::jsonb) "
+                    "ON CONFLICT (id) DO NOTHING"
+                ),
+                {"id": uuid.UUID(run_id)},
+            )
+            _s.commit()
+
+        persist_deliverable(
+            _SessionLocal,
+            run_id,
+            {
+                "document_id": doc_id,
+                "claims": [
+                    {
+                        "claim_id": "loan_agreement.interest_rate_001",
+                        "claim_text": "15% per annum",
+                        "confidence": 0.92,
+                        "citation_status": "grounded",
+                    },
+                    {
+                        "claim_id": "loan_agreement.interest_rate_002",
+                        "claim_text": "Compounded monthly",
+                        "confidence": 0.85,
+                        "citation_status": "grounded",
+                    },
+                    {
+                        "claim_id": "loan_agreement.tenure_003",
+                        "claim_text": "24 months",
+                        "confidence": 0.88,
+                        "citation_status": "grounded",
+                    },
+                ],
+            },
+        )
 
         # ---------------------------------------------------------------
         # Step 9: Get the deliverable via MCP tool
         # ---------------------------------------------------------------
-        deliv_result = mcp_call(get_deliverable_tool)
+        deliv_result = mcp_call(get_deliverable_tool, run_id=run_id)
 
         assert deliv_result["deliverable_hash"]  # non-empty hash
         assert "loan_agreement.interest_rate" in deliv_result["sections"]

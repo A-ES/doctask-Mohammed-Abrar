@@ -12,6 +12,19 @@ export function isUnverifiable(citation: SourceCitation): boolean {
 }
 
 /**
+ * The single item-level definition of "unverifiable evidence".
+ *
+ * An item counts as unverifiable when it has NO citations at all
+ * (empty array) or when EVERY citation is unverifiable (status flag set
+ * or source_location null). This is the only definition; call sites
+ * (QueueItemCard marker, unverifiable-only filter) must use this function
+ * and must not reimplement it.
+ */
+export function itemIsUnverifiable(citations: SourceCitation[]): boolean {
+  return citations.length === 0 || citations.every(isUnverifiable);
+}
+
+/**
  * Returns the display label for a citation chip.
  * - Unverifiable citations → "[citation unverifiable]"
  * - Verifiable citations → clause_ref if available, otherwise "p.{page_number}"

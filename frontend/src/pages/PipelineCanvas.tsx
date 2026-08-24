@@ -15,6 +15,9 @@ import { MergeNode } from '@/components/pipeline/MergeNode';
 import { AddNode } from '@/components/pipeline/AddNode';
 import { SmoothEdge } from '@/components/pipeline/SmoothEdge';
 import { NodeDetailPanel } from '@/components/pipeline/NodeDetailPanel';
+import { PendingReviewPanel } from '@/components/pipeline/PendingReviewPanel';
+import { DeliverablePanel } from '@/components/pipeline/DeliverablePanel';
+import { FindingsPanel } from '@/components/pipeline/FindingsPanel';
 import { ReportPanel } from '@/components/pipeline/ReportPanel';
 import { usePipelineState } from '@/hooks/usePipelineState';
 import { applyDagreLayout } from '@/utils/pipelineLayout';
@@ -233,6 +236,14 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, onRunDel
                           </span>
                         )}
                       </div>
+                      {(run.needs_recheck_count ?? 0) > 0 && (
+                        <span
+                          className="flex-shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                          title="Has approvals made with zero/null citations — flagged for re-review"
+                        >
+                          {run.needs_recheck_count} recheck
+                        </span>
+                      )}
                       <button
                         onClick={(e) => { e.stopPropagation(); onRunDelete(run.id); }}
                         className="opacity-0 group-hover:opacity-100 p-1 rounded text-white/30 hover:text-rose-400 hover:bg-rose-500/10 transition-all"
@@ -256,7 +267,7 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, onRunDel
 
 // ─── TopBar ──────────────────────────────────────────────────────────────────
 
-type OverlayMode = 'none' | 'history' | 'cost';
+type OverlayMode = 'none' | 'history' | 'cost' | 'review' | 'deliverable' | 'findings';
 
 function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, totalCost, onStartPipeline, isUploading, activeRunId, activeFilename, canResume, isResuming, onResume, pendingCount, onOpenReview, onViewReport }: {
   runStatus: string;
@@ -314,14 +325,19 @@ function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, total
             Σ {totalCost}
           </span>
         )}
-        {/* Pending approvals badge */}
+        {/* Pending approvals badge — always visible in the header so a run
+            waiting on a human can't be missed. Clicking opens the Review tab. */}
         {pendingCount > 0 && (
           <button
             onClick={onOpenReview}
-            className="flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 transition-colors"
+            className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium border transition-colors ${
+              overlayMode === 'review'
+                ? 'bg-amber-500/25 text-amber-200 border-amber-500/40'
+                : 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25 animate-pulse'
+            }`}
           >
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-            {pendingCount} pending
+            <span className="w-2 h-2 rounded-full bg-amber-400" />
+            {pendingCount} pending review
           </button>
         )}
       </div>
@@ -329,17 +345,22 @@ function TopBar({ runStatus, connectionLost, overlayMode, onOverlayChange, total
       <div className="flex items-center gap-2">
         {/* Overlay mode toggle */}
         <div className="flex rounded-md border border-white/[0.08] overflow-hidden">
-          {(['none', 'history', 'cost'] as OverlayMode[]).map((mode) => (
+          {(['none', 'history', 'cost', 'review', 'deliverable', 'findings'] as OverlayMode[]).map((mode) => (
             <button
               key={mode}
               onClick={() => onOverlayChange(mode)}
-              className={`px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors ${
+              className={`relative px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider transition-colors ${
                 overlayMode === mode
                   ? 'bg-indigo-500/20 text-indigo-300'
                   : 'text-white/40 hover:text-white/60 hover:bg-white/[0.03]'
               }`}
             >
               {mode === 'none' ? 'Status' : mode}
+              {mode === 'review' && pendingCount > 0 && overlayMode !== 'review' && (
+                <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-[9px] font-bold text-black shadow-sm">
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -570,28 +591,46 @@ export function PipelineCanvas() {
       });
   }, [overlayMode, activeRunId]);
 
-  // Fetch pending approvals count when run completes or active run changes
+  // Live poll of pending approvals count while a run is active.
+  // Runs every ~10s so a run waiting on a human is always reflected in
+  // the header badge, even mid-run (items appear as route_to_queue fires).
   useEffect(() => {
     if (!activeRunId) {
       setPendingApprovalsCount(0);
       return;
     }
-    // Fetch after run completes, or on run switch
-    const shouldFetch = !runState || runState.run_status === 'completed' || runState.run_status === 'paused';
-    if (!shouldFetch) return;
 
-    fetch(`${import.meta.env.VITE_API_BASE_URL ?? ''}/approval/runs/${activeRunId}/queue`)
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (data) setPendingApprovalsCount(data.pending ?? 0);
-      })
-      .catch(() => {});
-  }, [activeRunId, runState?.run_status]);
+    let cancelled = false;
+
+    const fetchPending = () => {
+      fetch(`${import.meta.env.VITE_API_BASE_URL ?? ''}/approval/runs/${activeRunId}/queue`)
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (!cancelled && data) setPendingApprovalsCount(data.pending ?? 0);
+        })
+        .catch(() => {});
+    };
+
+    fetchPending();
+    const interval = setInterval(fetchPending, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeRunId]);
 
   // Close report when active run changes (report is per-run; user must re-open explicitly)
   useEffect(() => {
     setShowReport(false);
   }, [activeRunId]);
+
+  // Close the node detail panel when an overlay tab opens —
+  // they share the same right-edge overlay space.
+  useEffect(() => {
+    if (overlayMode !== 'none' && overlayMode !== 'history' && overlayMode !== 'cost') {
+      setSelectedNodeId(null);
+    }
+  }, [overlayMode]);
 
   // Load existing runs on mount
   useEffect(() => {
@@ -830,10 +869,7 @@ export function PipelineCanvas() {
           isResuming={isResuming}
           onResume={handleResume}
           pendingCount={pendingApprovalsCount}
-          onOpenReview={() => {
-            setSelectedNodeId('human_review');
-            setSelectedNodeLabel('Human Review');
-          }}
+          onOpenReview={() => setOverlayMode('review')}
           onViewReport={() => setShowReport(true)}
         />
 
@@ -879,6 +915,28 @@ export function PipelineCanvas() {
             onClose={handleClosePanel}
             runId={activeRunId}
           />
+
+          {/* Pending Review overlay — every queue item for this run */}
+          <PendingReviewPanel
+            runId={activeRunId}
+            open={overlayMode === 'review'}
+            onClose={() => setOverlayMode('none')}
+            onPendingCountChange={setPendingApprovalsCount}
+          />
+
+          {/* Deliverable Register overlay — assembled output + update diff */}
+          <DeliverablePanel
+            runId={activeRunId}
+            open={overlayMode === 'deliverable'}
+            onClose={() => setOverlayMode('none')}
+          />
+
+          {/* Findings audit-trail overlay — every finding, resolved or not */}
+          <FindingsPanel
+            runId={activeRunId}
+            open={overlayMode === 'findings'}
+            onClose={() => setOverlayMode('none')}
+          />
         </div>
       </div>
 
@@ -888,10 +946,7 @@ export function PipelineCanvas() {
         runStatus={runState?.run_status ?? null}
         onClose={() => setShowReport(false)}
         open={showReport}
-        onOpenApprovals={() => {
-          setSelectedNodeId('human_review');
-          setSelectedNodeLabel('Human Review');
-        }}
+        onOpenApprovals={() => setOverlayMode('review')}
       />
     </div>
   );

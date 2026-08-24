@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from src.database import SessionLocal
+from src.pipeline.history_sql import emit_incremental_update_event
 from src.models.audit import AuditEvent
 from src.models.documents import Document, DocumentVersion
 from src.models.piles import Pile, PileDocument
@@ -287,35 +288,13 @@ Respond with JSON: {"label": "<category>"}"""
 def _build_deliverable_from_run_state(run_state: dict) -> Deliverable:
     """Reconstruct a Deliverable from a completed run's output state.
 
-    The deliverable is built from the claims in the run's final state,
-    grouping them into sections by claim type prefix.
+    Thin wrapper over the shared builder in deliverable_store — the same
+    implementation the finalize node now uses, so both paths produce
+    byte-identical section hashes.
     """
-    deliverable = Deliverable()
-    claims = run_state.get("claims", [])
+    from src.pipeline.deliverable_store import build_deliverable_from_state
 
-    for claim_data in claims:
-        # Claims in the pipeline state are ExtractionResult-typed dicts
-        claim_id = claim_data.get("claim_id", str(uuid.uuid4()))
-        claim_text = claim_data.get("claim_text", "")
-
-        # Derive claim_type from claim_id (format: "doc_type.field_name_idx")
-        # or fall back to using the claim_id itself as a section key
-        if "." in claim_id:
-            claim_type = claim_id.rsplit("_", 1)[0] if "_" in claim_id else claim_id
-        else:
-            claim_type = f"generic.{claim_id}"
-
-        deliverable.add_claim(SectionClaim(
-            claim_id=claim_id,
-            claim_type=claim_type,
-            extracted_text=claim_text,
-            confidence=float(claim_data.get("confidence", 0.7)),
-            source_document_id=run_state.get("document_id", "unknown"),
-            citation_status=claim_data.get("citation_status", "grounded"),
-        ))
-
-    deliverable.compute_all_hashes()
-    return deliverable
+    return build_deliverable_from_state(run_state)
 
 
 def _get_latest_completed_run_for_pile(pile_id: str) -> Optional[dict]:
@@ -549,21 +528,18 @@ async def incremental_add_document(
     # Recompute hashes after update
     hashes_after = deliverable.compute_all_hashes()
 
-    # Emit audit event
-    _emit_audit_event(
-        entity_type="pile",
-        entity_id=pile_id,
-        action="incremental_update",
-        actor_id="incremental_api",
-        previous_state={"section_hashes": hashes_before},
-        new_state={
-            "section_hashes": hashes_after,
-            "affected_sections": list(result.affected_sections),
-            "conflicts_detected": len(result.conflicts),
-            "approval_items_created": result.approval_items_created,
-            "new_document_id": doc_id_str,
-        },
-        source_ref=doc_id_str,
+    # Emit audit event — entity_type/action must conform to migration 006
+    # CHECK constraints ('pile'/'incremental_update' were silently rejected).
+    emit_incremental_update_event(
+        SessionLocal,
+        run_id=run_id,
+        pile_id=pile_id,
+        new_document_id=doc_id_str,
+        affected_sections=list(result.affected_sections),
+        conflicts_detected=len(result.conflicts),
+        approval_items_created=result.approval_items_created,
+        hashes_before=hashes_before,
+        hashes_after=hashes_after,
     )
 
     return IncrementalUpdateResponse(
@@ -608,14 +584,17 @@ async def configure_watch(pile_id: str, request: WatchConfigRequest) -> WatchCon
         pile.updated_at = datetime.now(timezone.utc)
         session.commit()
 
-        # Audit event
+        # Audit event (entity_type 'pile' allowed since migration 012)
         _emit_audit_event(
             entity_type="pile",
             entity_id=pile_id,
-            action="watch_configured",
+            action="updated",
             actor_id="api",
             previous_state={"watched_folder_path": previous_path},
-            new_state={"watched_folder_path": request.watched_folder_path},
+            new_state={
+                "watched_folder_path": request.watched_folder_path,
+                "type": "watch_configured",
+            },
         )
 
         return WatchConfigResponse(

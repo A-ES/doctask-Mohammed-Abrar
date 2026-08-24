@@ -7,12 +7,13 @@ back to the original text substring.
 import re
 import uuid
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Callable, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.models.claims import Claim, SourceLocation
-from src.pipeline.extractors.base import ExtractedFact
+from src.pipeline.extractors.base import ExtractedFact, SourceSpan
 
 
 class SourceResolutionError(Exception):
@@ -128,6 +129,7 @@ def persist_fact(
     run_id: str,
     document_type: str,
     session: Session,
+    extraction_method: Optional[str] = None,
 ) -> tuple[Claim, Optional[SourceLocation]]:
     """Persist an ExtractedFact as a Claim + optional SourceLocation pair.
 
@@ -145,6 +147,8 @@ def persist_fact(
         run_id: UUID string of the pipeline run.
         document_type: Classification label (e.g. "loan_agreement").
         session: SQLAlchemy session for persistence.
+        extraction_method: How the fact was extracted
+            ('structured' | 'llm' | 'llm_fallback' | 'regex_fallback').
 
     Returns:
         Tuple of (Claim, SourceLocation or None) that were added to the session.
@@ -163,6 +167,8 @@ def persist_fact(
         extracted_text=fact.value,
         claim_type=claim_type,
         confidence=Decimal(str(round(fact.confidence, 3))),
+        field_name=fact.field_name[:128],
+        extraction_method=extraction_method[:16] if extraction_method else None,
     )
     session.add(claim)
     session.flush()  # get claim.id
@@ -182,3 +188,145 @@ def persist_fact(
     )
     session.add(source_location)
     return claim, source_location
+
+
+# ---------------------------------------------------------------------------
+# Node-completion persistence for extract_claims
+#
+# persist_fact() above was dead code: the extract_claims node built
+# SourceLocation objects via SourceLinker.attach() and discarded them,
+# leaving claims/source_locations unwritten (data lived only in the
+# PipelineState JSONB checkpoint). The functions below make the
+# extraction node write the durable record at NODE COMPLETION — not at
+# some later finalize step that may never run. The JSONB checkpoint is
+# kept untouched as the resumability mechanism; both stores end up
+# holding equivalent data.
+# ---------------------------------------------------------------------------
+
+
+_TRAILING_INDEX_RE = re.compile(r"[-_]\d+$")
+
+
+def _result_to_fact(
+    result: dict[str, Any], document_type: str
+) -> Optional[ExtractedFact]:
+    """Map an ExtractionResult dict onto an ExtractedFact for persist_fact().
+
+    Derives field_name from the claim_id ("doc_type.field_N" → "field",
+    "doc-001" → "001"). Grounded results with a valid span get a
+    SourceSpan; anything unverifiable or degenerate (start >= end)
+    maps to source_span=None, which persist_fact treats as an
+    unverifiable citation.
+    """
+    claim_id = str(result.get("claim_id", ""))
+    if not claim_id:
+        return None
+
+    field_name = claim_id
+    prefix = f"{document_type}."
+    if field_name.startswith(prefix):
+        field_name = field_name[len(prefix):]
+    elif field_name.startswith(document_type):
+        field_name = field_name[len(document_type):]
+    field_name = _TRAILING_INDEX_RE.sub("", field_name) or claim_id
+
+    try:
+        confidence = min(1.0, max(0.0, float(result.get("confidence", 0.7))))
+    except (TypeError, ValueError):
+        confidence = 0.7
+
+    source_span: Optional[SourceSpan] = None
+    if result.get("citation_status") == "grounded":
+        try:
+            start = int(result.get("start_offset", 0))
+            end = int(result.get("end_offset", 0))
+        except (TypeError, ValueError):
+            start, end = 0, 0
+        if 0 <= start < end:
+            source_span = SourceSpan(
+                start_offset=start,
+                end_offset=end,
+                page_number=result.get("page_number"),
+                section_id=result.get("section_id"),
+            )
+
+    return ExtractedFact(
+        field_name=field_name,
+        value=str(result.get("claim_text", "")),
+        confidence=confidence,
+        source_span=source_span,
+    )
+
+
+def persist_extraction_results(
+    session_factory: sessionmaker,
+    state: dict[str, Any],
+    claims: list[dict[str, Any]],
+) -> int:
+    """Persist a run's extracted claims to claims/source_locations NOW.
+
+    Called by the extract_claims node on completion. Idempotent per run:
+    existing rows for the run are replaced so resumed/retried runs never
+    duplicate. Uses persist_fact() as the single mapping path.
+
+    Returns:
+        Number of claims persisted.
+    """
+    run_id = str(state.get("run_id", ""))
+    document_version_id = str(state.get("document_version_id", ""))
+    document_type = str(state.get("classification_label") or "unknown")
+
+    if not run_id or not document_version_id:
+        raise ValueError(
+            "persist_extraction_results requires run_id and "
+            "document_version_id in state"
+        )
+    run_uuid = uuid.UUID(run_id)
+
+    with session_factory() as session:  # type: Session
+        # Replace-any: delete this run's previous rows first so retries
+        # and resume-from-checkpoint don't duplicate the durable record.
+        session.execute(
+            text(
+                """
+                DELETE FROM source_locations
+                WHERE claim_id IN (
+                    SELECT id FROM claims WHERE run_id = :run_id
+                )
+                """
+            ),
+            {"run_id": run_uuid},
+        )
+        session.execute(
+            text("DELETE FROM claims WHERE run_id = :run_id"),
+            {"run_id": run_uuid},
+        )
+
+        persisted = 0
+        for result in claims:
+            fact = _result_to_fact(dict(result), document_type)
+            if fact is None:
+                continue
+            persist_fact(
+                fact=fact,
+                document_version_id=document_version_id,
+                run_id=run_id,
+                document_type=document_type,
+                session=session,
+                extraction_method=result.get("_extraction_method"),
+            )
+            persisted += 1
+
+        session.commit()
+        return persisted
+
+
+def make_sql_claim_persister(
+    session_factory: sessionmaker,
+) -> Callable[[dict[str, Any], list[dict[str, Any]]], int]:
+    """Build the persister callable injected into the extract_claims node."""
+
+    def _persist(state: dict[str, Any], claims: list[dict[str, Any]]) -> int:
+        return persist_extraction_results(session_factory, state, claims)
+
+    return _persist

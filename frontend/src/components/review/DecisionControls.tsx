@@ -67,12 +67,21 @@ export function DecisionControls({
   );
 
   if (!isPending) {
+    const isRecheck = item.status === "approved_needs_recheck";
     return (
       <section aria-label="Decision controls">
         <p className="text-sm text-white/50">
           Decision:{" "}
-          <span className={`font-medium capitalize ${item.decision === "approved" ? "text-emerald-400" : "text-rose-400"}`}>
-            {item.decision ?? item.status}
+          <span
+            className={`font-medium capitalize ${
+              isRecheck
+                ? "text-amber-300"
+                : item.decision === "rejected"
+                  ? "text-rose-400"
+                  : "text-emerald-400"
+            }`}
+          >
+            {isRecheck ? "approved — needs recheck" : (item.decision ?? item.status)}
           </span>
         </p>
       </section>

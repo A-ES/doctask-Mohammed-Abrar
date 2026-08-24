@@ -22,7 +22,43 @@ from typing import Any, Optional
 from src.llm.deepseek_client import chat_completion, chat_completion_json
 from src.pipeline.cancel import is_cancelled
 from src.pipeline.config import PipelineConfig, load_config
+from src.pipeline.history_sql import (
+    emit_node_completed,
+    emit_run_status_changed,
+)
 from src.pipeline.serialization import serialize_state
+
+def _emit_history_event(fn, session_factory, state: dict, **kwargs) -> None:
+    """Best-effort audit write with ONE retry.
+
+    On persistent failure, marks the run's persistence gap so the run
+    ends as 'completed_with_persistence_gap' instead of silently
+    under-reporting history.
+    """
+    for attempt in (1, 2):
+        try:
+            fn(session_factory, **kwargs)
+            return
+        except Exception as e:
+            logger.warning(
+                "Audit event write failed (attempt %d/2) for run %s: %s",
+                attempt, kwargs.get("run_id"), e,
+            )
+    _mark_persistence_gap(state)
+
+
+def _mark_persistence_gap(state: dict) -> None:
+    """Flag the run so it ends as 'completed_with_persistence_gap'."""
+    state["_persistence_gap"] = True
+
+
+def _resolve_final_status(state: dict) -> str:
+    """Final run status reflecting any durability-write failures."""
+    return (
+        "completed_with_persistence_gap"
+        if state.get("_persistence_gap")
+        else "completed"
+    )
 from src.pipeline.state import (
     ChunkEntry,
     ComplianceVerdict,
@@ -79,6 +115,14 @@ async def run_pipeline(
 
     # Update run status to running
     await _update_run_status(session_factory, run_id, "running")
+    _emit_history_event(
+        emit_run_status_changed,
+        session_factory,
+        state,
+        run_id=run_id,
+        old_status="pending",
+        new_status="running",
+    )
 
     # Define the node execution sequence
     nodes = [
@@ -103,12 +147,21 @@ async def run_pipeline(
         "mime_type": mime_type,
         "filename": filename,
         "run_id": run_id,
+        "session_factory": session_factory,
     }
 
     for step_order, (node_name, node_fn) in enumerate(nodes, start=1):
         # Cooperative cancellation check between nodes
         if is_cancelled(run_id):
             await _update_run_status(session_factory, run_id, "cancelled")
+            _emit_history_event(
+                emit_run_status_changed,
+                session_factory,
+                state,
+                run_id=run_id,
+                old_status="running",
+                new_status="cancelled",
+            )
             await _broadcast(sse_callback, {
                 "type": "run_complete",
                 "run_id": run_id,
@@ -151,6 +204,18 @@ async def run_pipeline(
             input_tokens, output_tokens,
         )
 
+        if state["node_status"] in ("completed", "skipped"):
+            _emit_history_event(
+                emit_node_completed,
+                session_factory,
+                state,
+                run_id=run_id,
+                node_name=node_name,
+                node_status=state["node_status"],
+                duration_ms=elapsed_ms,
+                source_ref=state.get("document_version_id"),
+            )
+
         # Broadcast: node completed
         await _broadcast(sse_callback, {
             "type": "node_complete",
@@ -169,6 +234,14 @@ async def run_pipeline(
         # If node errored with permanent error, stop pipeline
         if state["node_status"] == "error" and state.get("error_type") == "permanent":
             await _update_run_status(session_factory, run_id, "failed")
+            _emit_history_event(
+                emit_run_status_changed,
+                session_factory,
+                state,
+                run_id=run_id,
+                old_status="running",
+                new_status="failed",
+            )
             await _broadcast(sse_callback, {
                 "type": "run_complete",
                 "run_id": run_id,
@@ -177,8 +250,18 @@ async def run_pipeline(
             })
             return state
 
-    # Pipeline completed successfully
-    await _update_run_status(session_factory, run_id, "completed")
+    # Pipeline completed successfully — unless durability writes failed,
+    # in which case the gap must be visible in the run status itself.
+    final_status = _resolve_final_status(state)
+    await _update_run_status(session_factory, run_id, final_status)
+    _emit_history_event(
+        emit_run_status_changed,
+        session_factory,
+        state,
+        run_id=run_id,
+        old_status="running",
+        new_status="completed",
+    )
     await _broadcast(sse_callback, {
         "type": "run_complete",
         "run_id": run_id,
@@ -471,6 +554,25 @@ Extract ALL factual claims — amounts, rates, dates, party names, obligations, 
     all_claims: list[ExtractionResult] = []
     total_inp = 0
     total_out = 0
+    full_text = state.get("extracted_text") or ""
+
+    def _locate_span(claim_text: str, batch: list[dict]) -> tuple[int, int, str]:
+        """Resolve a claim's true document-level span.
+
+        Tries the full extracted text first, then chunk-local search with
+        proper chunk-start offset math. Returns (start, end,
+        citation_status); unverifiable spans are (0, 0).
+        """
+        if claim_text:
+            pos = full_text.find(claim_text)
+            if pos >= 0:
+                return pos, pos + len(claim_text), "grounded"
+            for c in batch:
+                local = c["text"].find(claim_text)
+                if local >= 0:
+                    start = c["start_offset"] + local
+                    return start, start + len(claim_text), "grounded"
+        return 0, 0, "unverifiable"
 
     # Process chunks (batch up to 5 at a time to avoid too many API calls)
     batch_size = 3
@@ -496,48 +598,86 @@ Extract ALL factual claims — amounts, rates, dates, party names, obligations, 
                 # Map back to the appropriate chunk
                 chunk_idx = batch[min(j // max(1, len(raw_claims) // len(batch)), len(batch) - 1)]["index"]
 
+                # Resolve the claim's real position in the document —
+                # previously hardcoded start=0 / end=len(claim_text),
+                # which produced meaningless spans (all start_offset: 0).
+                start, end, citation_status = _locate_span(
+                    claim.get("claim_text", ""), batch
+                )
+
                 all_claims.append(ExtractionResult(
                     claim_id=claim_id,
                     claim_text=claim.get("claim_text", ""),
                     chunk_index=chunk_idx,
-                    start_offset=0,
-                    end_offset=len(claim.get("claim_text", "")),
+                    start_offset=start,
+                    end_offset=end,
                     confidence=float(claim.get("confidence", 0.7)),
-                    citation_status="grounded",
+                    citation_status=citation_status,
+                    _extraction_method="llm",
                 ))
         except Exception as e:
             logger.warning("Claim extraction LLM failed for batch %d (using regex fallback): %s", i, e)
             # Fallback: extract simple patterns from text
             import re
+
+            def _add_regex_claim(c: dict, text_match: str, m_start: int, m_end: int) -> None:
+                claim_id = f"{doc_type}-{len(all_claims) + 1:03d}"
+                all_claims.append(ExtractionResult(
+                    claim_id=claim_id,
+                    claim_text=text_match,
+                    chunk_index=c["index"],
+                    # Regex offsets are chunk-relative — convert to
+                    # document-level by adding the chunk's start.
+                    start_offset=c["start_offset"] + m_start,
+                    end_offset=c["start_offset"] + m_end,
+                    confidence=0.6,
+                    citation_status="grounded",
+                    _extraction_method="regex_fallback",
+                ))
+
             for c in batch:
                 chunk_text = c["text"]
                 # Find monetary amounts
                 for m in re.finditer(r'(?:INR|Rs\.?|₹)\s*[\d,]+(?:\.\d+)?', chunk_text):
-                    claim_id = f"{doc_type}-{len(all_claims) + 1:03d}"
-                    all_claims.append(ExtractionResult(
-                        claim_id=claim_id,
-                        claim_text=m.group(0).strip(),
-                        chunk_index=c["index"],
-                        start_offset=m.start(),
-                        end_offset=m.end(),
-                        confidence=0.6,
-                        citation_status="grounded",
-                    ))
+                    _add_regex_claim(c, m.group(0).strip(), m.start(), m.end())
                 # Find percentages
                 for m in re.finditer(r'\d+(?:\.\d+)?%\s*(?:per\s+annum|p\.?a\.?)?', chunk_text):
-                    claim_id = f"{doc_type}-{len(all_claims) + 1:03d}"
-                    all_claims.append(ExtractionResult(
-                        claim_id=claim_id,
-                        claim_text=m.group(0).strip(),
-                        chunk_index=c["index"],
-                        start_offset=m.start(),
-                        end_offset=m.end(),
-                        confidence=0.6,
-                        citation_status="grounded",
-                    ))
+                    _add_regex_claim(c, m.group(0).strip(), m.start(), m.end())
 
     completed = list(state.get("completed_nodes", []))
     completed.append("extract_claims")
+
+    # Durable record: write claims/source_locations at node completion,
+    # via the same persist_fact() path the LangGraph node uses.
+    # ONE retry, then mark-and-continue: a silent gap is unacceptable,
+    # so the run ends as 'completed_with_persistence_gap' instead of a
+    # plain 'completed'.
+    session_factory = ctx.get("session_factory")
+    if session_factory is not None and all_claims:
+        from src.pipeline.source_linker import persist_extraction_results
+
+        persisted = False
+        for attempt in (1, 2):
+            try:
+                n = persist_extraction_results(
+                    session_factory,
+                    dict(state),
+                    [dict(c) for c in all_claims],
+                )
+                logger.info(
+                    "Persisted %d claims (with source locations) for run %s",
+                    n,
+                    state.get("run_id"),
+                )
+                persisted = True
+                break
+            except Exception as e:
+                logger.warning(
+                    "Claim persistence failed (attempt %d/2) for run %s: %s",
+                    attempt, state.get("run_id"), e,
+                )
+        if not persisted:
+            state["_persistence_gap"] = True
 
     return PipelineState(**{
         **state,
@@ -873,12 +1013,30 @@ async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
     except Exception:
         approval_service = None
 
-    # Enqueue each escalated claim as a pending approval item
+    # Enqueue each escalated claim as a pending approval item.
+    # Dedup by claim_id — same guarantee as the populate-queue backfill
+    # (main.py) so node re-execution can never create duplicates.
     decisions: list[Decision] = []
     claims = state.get("claims", [])
     claim_map = {c["claim_id"]: c for c in claims}
 
+    existing_claim_ids: set[str] = set()
+    if approval_service is not None:
+        for existing_item in approval_service.get_all(run_id):
+            cid = (
+                existing_item.payload.get("details", {}).get("claim_id")
+                or existing_item.payload.get("claim_id", "")
+            )
+            if cid:
+                existing_claim_ids.add(cid)
+
     for claim_id in escalated:
+        if approval_service is not None and claim_id in existing_claim_ids:
+            logger.info(
+                "Skipping enqueue for claim %s (already in queue for run %s)",
+                claim_id, run_id,
+            )
+            continue
         claim_data = claim_map.get(claim_id, {})
         claim_text = claim_data.get("claim_text", claim_id)
         confidence = claim_data.get("confidence", 0)
@@ -910,6 +1068,7 @@ async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
                 item_type="finding",
                 payload=payload,
             )
+            existing_claim_ids.add(claim_id)
         # No decision yet — items stay pending for human review
 
     completed = list(state.get("completed_nodes", []))
@@ -928,9 +1087,39 @@ async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
 
 
 async def _node_finalize(state: PipelineState, ctx: dict) -> PipelineState:
-    """Finalize pipeline — collect all decisions and mark complete."""
+    """Finalize pipeline — persist the deliverable and mark complete.
+
+    Builds the run's deliverable from the final state (same builder the
+    incremental flow uses) and upserts it into the `deliverables` table
+    so GET /runs/{id}/deliverable and the MCP get_deliverable tool can
+    serve it after the process is gone.
+    """
     completed = list(state.get("completed_nodes", []))
     completed.append("finalize")
+    try:
+        from src.pipeline.deliverable_store import persist_deliverable
+
+        session_factory = ctx.get("session_factory")
+        if session_factory is not None:
+            record = persist_deliverable(
+                session_factory, state["run_id"], dict(state)
+            )
+            logger.info(
+                "Deliverable persisted for run %s (%d sections, %d claims, hash=%s)",
+                state["run_id"],
+                record["section_count"],
+                record["claim_count"],
+                record["deliverable_hash"][:12],
+            )
+    except Exception as e:
+        logger.exception(
+            "Failed to persist deliverable for run %s: %s", state.get("run_id"), e
+        )
+        return _error_state(
+            state,
+            "finalize",
+            f"Deliverable persistence failed: {e}",
+        )
 
     return PipelineState(**{
         **state,
@@ -980,7 +1169,10 @@ async def _update_run_status(session_factory, run_id: str, status: str) -> None:
         session.execute(
             update(Run).where(Run.id == uuid.UUID(run_id)).values(
                 status=status,
-                ended_at=datetime.now(timezone.utc) if status in ("completed", "failed") else None,
+                ended_at=datetime.now(timezone.utc)
+                if status in ("completed", "failed")
+                or status.startswith("completed_with_")
+                else None,
             )
         )
         session.commit()

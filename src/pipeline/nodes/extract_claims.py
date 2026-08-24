@@ -32,6 +32,38 @@ from src.pipeline.state import ChunkEntry, ExtractionResult, PipelineState
 
 logger = logging.getLogger(__name__)
 
+# Module-level persister, injectable for testing / graph wiring
+# (nodes receive only state in the LangGraph path). When set, it is
+# called at NODE COMPLETION with (state, claims) so the durable record
+# in claims/source_locations exists even if the run never reaches
+# finalize. The JSONB checkpoint stays as-is for resumability.
+_persister: Optional[Any] = None
+
+
+def set_claim_persister(persister) -> None:
+    """Inject the claim persistence callable: (state, claims) -> None."""
+    global _persister
+    _persister = persister
+
+
+def get_claim_persister():
+    """Return the configured claim persister, or None."""
+    return _persister
+
+
+def _persist_claims(state: PipelineState, all_claims: list[ExtractionResult]) -> None:
+    """Call the injected persister; never fails extraction on its errors."""
+    if _persister is None or not all_claims:
+        return
+    try:
+        _persister(dict(state), [dict(c) for c in all_claims])
+    except Exception:
+        logger.exception(
+            "Claim persistence failed for run %s — durable record not "
+            "written, checkpoint still holds the data",
+            state.get("run_id"),
+        )
+
 
 class ClaimExtractor(Protocol):
     """Protocol for extracting factual claims from chunk text via LLM."""
@@ -58,6 +90,7 @@ def _convert_fact_to_extraction_result(
     fact: ExtractedFact,
     document_type: str,
     idx: int,
+    extraction_method: str = "llm",
 ) -> ExtractionResult:
     """Convert an ExtractedFact to an ExtractionResult for downstream compatibility.
 
@@ -87,6 +120,7 @@ def _convert_fact_to_extraction_result(
         end_offset=end_offset,
         confidence=fact.confidence,
         citation_status=citation_status,
+        _extraction_method=extraction_method,
     )
 
 
@@ -124,6 +158,7 @@ async def _dispatch_type_specific_with_fallback(
     missing_fields: list[str] = [
         f.field_name for f in facts if f.value == "not_found"
     ]
+    llm_lookup: dict[str, ExtractedFact] = {}
 
     # Step 3: LLM fallback for missing fields
     if missing_fields and llm_client is not None:
@@ -138,7 +173,7 @@ async def _dispatch_type_specific_with_fallback(
         llm_facts = await llm_extractor.extract_fields(extracted_text, missing_fields)
 
         # Build a lookup of LLM results
-        llm_lookup: dict[str, ExtractedFact] = {f.field_name: f for f in llm_facts}
+        llm_lookup = {f.field_name: f for f in llm_facts}
 
         # Replace not_found facts with LLM results where available
         merged_facts: list[ExtractedFact] = []
@@ -173,7 +208,14 @@ async def _dispatch_type_specific_with_fallback(
                     fact.source_span.end_offset,
                 )
 
-        results.append(_convert_fact_to_extraction_result(fact, document_type, idx))
+        method = (
+            "llm_fallback"
+            if missing_fields and fact.field_name in (llm_lookup or {})
+            else "structured"
+        )
+        results.append(
+            _convert_fact_to_extraction_result(fact, document_type, idx, method)
+        )
 
     return results
 
@@ -268,6 +310,8 @@ async def extract_claims(
                 error_detail=f"LLM API failure: {exc}",
             )
 
+        _persist_claims(state, all_claims)
+
         completed_nodes = list(state.get("completed_nodes", []))
         completed_nodes.append("extract_claims")
 
@@ -294,6 +338,8 @@ async def extract_claims(
                 state,
                 error_detail=f"LLM API failure: {exc}",
             )
+
+        _persist_claims(state, all_claims)
 
         completed_nodes = list(state.get("completed_nodes", []))
         completed_nodes.append("extract_claims")
@@ -322,6 +368,8 @@ async def extract_claims(
                 state,
                 error_detail=f"LLM API failure: {exc}",
             )
+
+        _persist_claims(state, all_claims)
 
         completed_nodes = list(state.get("completed_nodes", []))
         completed_nodes.append("extract_claims")
@@ -357,6 +405,8 @@ async def extract_claims(
             state,
             error_detail=f"LLM API failure: {exc}",
         )
+
+    _persist_claims(state, all_claims)
 
     completed_nodes = list(state.get("completed_nodes", []))
     completed_nodes.append("extract_claims")

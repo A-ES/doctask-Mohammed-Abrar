@@ -1,10 +1,12 @@
 import type { QueueItem, QueueFilters, SortField } from "@/types/review";
+import { itemIsUnverifiable } from "@/utils/citationHelpers";
 
 /**
  * Applies active filters to a list of queue items.
  * - If filters.itemType is set, keeps only items matching that type.
- * - If filters.unverifiableOnly is true, keeps only items with at least one
- *   source citation where citation_status === "unverifiable".
+ * - If filters.unverifiableOnly is true, keeps only items that are
+ *   unverifiable per the shared itemIsUnverifiable definition
+ *   (no citations, or every citation unverifiable/null-span).
  * Both filters can be active simultaneously (AND logic).
  */
 export function applyFilters(items: QueueItem[], filters: QueueFilters): QueueItem[] {
@@ -16,9 +18,7 @@ export function applyFilters(items: QueueItem[], filters: QueueFilters): QueueIt
 
   if (filters.unverifiableOnly) {
     result = result.filter((item) =>
-      item.payload.source_citations.some(
-        (citation) => citation.citation_status === "unverifiable"
-      )
+      itemIsUnverifiable(item.payload.source_citations)
     );
   }
 

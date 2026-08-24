@@ -117,6 +117,7 @@ class TestCreateInitialState:
             "queue_buckets",
             "decisions",
             "_last_node_metrics",
+            "_persistence_gap",
         }
         assert set(state.keys()) == expected_keys
 

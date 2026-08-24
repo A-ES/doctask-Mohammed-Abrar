@@ -92,6 +92,18 @@ class DeliverableResult:
 
 
 @dataclass
+class RunDeliverableResult:
+    """A persisted deliverable for a specific run (deliverables table)."""
+
+    run_id: str
+    deliverable_hash: str
+    section_count: int
+    claim_count: int
+    sections: dict[str, Any]
+    created_at: str
+
+
+@dataclass
 class HistoryResult:
     run_id: str
     entries: list[dict[str, Any]]
@@ -338,6 +350,40 @@ def get_deliverable() -> DeliverableResult:
     return DeliverableResult(
         sections=sections_data,
         deliverable_hash=registry.deliverable.deliverable_hash,
+    )
+
+
+def get_run_deliverable(
+    run_id: str, session_factory: Any = None
+) -> Optional[RunDeliverableResult]:
+    """Fetch the persisted deliverable for a run, or None if not finalized.
+
+    Reads the `deliverables` table written by the finalize node — the
+    same source the incremental flow now shares. Used identically by the
+    REST endpoint and the MCP get_deliverable tool.
+
+    Args:
+        run_id: The pipeline run identifier.
+        session_factory: Optional SQLAlchemy sessionmaker override
+            (defaults to the application SessionLocal; injectable for tests).
+    """
+    from src.pipeline.deliverable_store import load_deliverable_record
+
+    if session_factory is None:
+        from src.database import SessionLocal as _SessionLocal
+
+        session_factory = _SessionLocal
+
+    record = load_deliverable_record(session_factory, run_id)
+    if record is None:
+        return None
+    return RunDeliverableResult(
+        run_id=record["run_id"],
+        deliverable_hash=record["deliverable_hash"],
+        section_count=record["section_count"],
+        claim_count=record["claim_count"],
+        sections=record["sections"],
+        created_at=record["created_at"],
     )
 
 

@@ -147,14 +147,19 @@ class SQLResumeStore:
 
 
 class SQLHistoryStore:
-    """Placeholder history store."""
+    """History store backed by the audit_events table.
+
+    Thin alias over history_sql.SQLHistoryStore (kept here because
+    stores.py is the canonical store registry).
+    """
 
     def __init__(self, session_factory):
-        self._session_factory = session_factory
+        from src.pipeline.history_sql import SQLHistoryStore as _Impl
 
-    def get_run_history(self, run_id: str):
-        # Return empty history for now
-        return []
+        self._impl = _Impl(session_factory)
+
+    def get_events_for_run(self, run_id: str):
+        return self._impl.get_events_for_run(run_id)
 
 
 class SQLCostStore:

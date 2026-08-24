@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchPiles, createPile, fetchPileDetail, uploadToPile, uploadIncrementalDocument, deletePile } from '@/services/pipelineApi';
-import type { PileListItem, PileDetail, IncrementalUpdateResponse } from '@/services/pipelineApi';
+import type { PileListItem, PileDetail, IncrementalUpdateResponse, PileDocumentItem } from '@/services/pipelineApi';
 import { FileDropZone } from './FileDropZone';
+import { DocumentDetailPanel } from './DocumentDetailPanel';
 
 interface PilesPanelProps {
   selectedPileId: string | null;
@@ -22,6 +23,7 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isIncremental, setIsIncremental] = useState(false);
   const [incrementalResult, setIncrementalResult] = useState<IncrementalUpdateResponse | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<PileDocumentItem | null>(null);
   const incrementalInputRef = useRef<HTMLInputElement>(null);
 
   // Load piles list
@@ -207,12 +209,18 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
               {pileDetail.documents.map((doc) => (
                 <div
                   key={doc.document_id}
-                  className="flex items-center gap-2 rounded px-2 py-1.5 bg-white/[0.02]"
+                  className="flex items-center gap-2 rounded px-2 py-1.5 bg-white/[0.02] hover:bg-white/[0.05] cursor-pointer transition-colors"
+                  onClick={() => setSelectedDoc(doc)}
+                  title={`View extracted facts from ${doc.filename}`}
+                  data-testid={`document-${doc.document_id}`}
                 >
                   <MimeIcon mime={doc.mime_type} />
                   <span className="text-[12px] text-white/60 truncate flex-1">
                     {doc.filename}
                   </span>
+                  <svg className="w-3 h-3 text-white/25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path d="M9 18l6-6-6-6" />
+                  </svg>
                 </div>
               ))}
             </div>
@@ -267,6 +275,15 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
             <p className="text-[11px] text-rose-400">{uploadError}</p>
           )}
         </div>
+      )}
+
+      {/* Document detail overlay */}
+      {selectedDoc && (
+        <DocumentDetailPanel
+          documentId={selectedDoc.document_id}
+          filename={selectedDoc.filename}
+          onClose={() => setSelectedDoc(null)}
+        />
       )}
     </div>
   );

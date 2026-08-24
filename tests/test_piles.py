@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from src.database import SessionLocal
 from src.main import app
@@ -27,6 +28,30 @@ client = TestClient(app)
 # ---------------------------------------------------------------------------
 
 
+def _delete_run_dependents(session, run_ids: list[str]) -> None:
+    """Delete claims/source_locations for runs before deleting the runs.
+
+    Since extract_claims persists its durable record at node completion
+    (claims.run_id FK is ON DELETE RESTRICT), runs can no longer be
+    deleted while their claim rows exist.
+    """
+    if not run_ids:
+        return
+    from sqlalchemy import text
+
+    session.execute(
+        text(
+            "DELETE FROM source_locations WHERE claim_id IN "
+            "(SELECT id FROM claims WHERE run_id::text = ANY(:rids))"
+        ),
+        {"rids": run_ids},
+    )
+    session.execute(
+        text("DELETE FROM claims WHERE run_id::text = ANY(:rids)"),
+        {"rids": run_ids},
+    )
+
+
 def _cleanup_pile(pile_id: str) -> None:
     """Remove pile, pile_documents, documents, versions, and runs created by a test."""
     session = SessionLocal()
@@ -36,6 +61,10 @@ def _cleanup_pile(pile_id: str) -> None:
         # Delete runs linked to this pile
         from sqlalchemy import delete
 
+        run_id_rows = session.execute(
+            select(Run.id).where(Run.pile_id == pid)
+        ).fetchall()
+        _delete_run_dependents(session, [str(r[0]) for r in run_id_rows])
         session.execute(delete(Run).where(Run.pile_id == pid))
 
         # Get document IDs from pile_documents
@@ -217,6 +246,7 @@ class TestRunWithPile:
             try:
                 from sqlalchemy import delete
                 from src.models.runs import RunStep
+                _delete_run_dependents(session, [run_id])
                 session.execute(delete(RunStep).where(RunStep.run_id == uuid.UUID(run_id)))
                 session.execute(delete(Run).where(Run.id == uuid.UUID(run_id)))
                 session.commit()
@@ -278,6 +308,7 @@ class TestRunWithPile:
             try:
                 from sqlalchemy import delete
                 from src.models.runs import RunStep
+                _delete_run_dependents(session, [run_id])
                 session.execute(delete(RunStep).where(RunStep.run_id == uuid.UUID(run_id)))
                 session.execute(delete(Run).where(Run.id == uuid.UUID(run_id)))
                 session.commit()
@@ -355,6 +386,7 @@ class TestPileIsolation:
             try:
                 from sqlalchemy import delete
                 from src.models.runs import RunStep
+                _delete_run_dependents(session, [run_a["run_id"], run_b["run_id"]])
                 for rid in [run_a["run_id"], run_b["run_id"]]:
                     session.execute(delete(RunStep).where(RunStep.run_id == uuid.UUID(rid)))
                     session.execute(delete(Run).where(Run.id == uuid.UUID(rid)))

@@ -27,7 +27,7 @@ from src.pipeline.services import (
     create_run,
     decide_approval_item,
     get_change_history,
-    get_deliverable,
+    get_run_deliverable,
     get_run_cost,
     get_run_status,
     list_pending_approvals,
@@ -115,13 +115,24 @@ def decide_approval_tool(
 @mcp.tool(
     name="get_deliverable",
     description=(
-        "Get the current deliverable — the assembled output of the pipeline. "
-        "Returns sections with their content hashes and claims."
+        "Get the persisted deliverable for a pipeline run — the assembled "
+        "output written by the finalize node. Returns the deliverable hash, "
+        "sections with content hashes, and claims with citations. "
+        "Returns an error if the run has not been finalized."
     ),
 )
-def get_deliverable_tool() -> str:
-    """Get the current deliverable."""
-    result = get_deliverable()
+def get_deliverable_tool(run_id: str) -> str:
+    """Get the persisted deliverable for a run."""
+    result = get_run_deliverable(run_id=run_id)
+    if result is None:
+        return json.dumps({
+            "error": "not_found",
+            "run_id": run_id,
+            "message": (
+                "No deliverable found for this run. Deliverables are "
+                "persisted when a run reaches the finalize node."
+            ),
+        })
     return json.dumps(asdict(result))
 
 

@@ -25,6 +25,7 @@ export interface RunListItem {
   filename: string | null;
   pile_id: string | null;
   pile_name: string | null;
+  needs_recheck_count?: number;
 }
 
 export interface NodeDetails {
@@ -208,6 +209,118 @@ export interface ResumeRunResponse {
   next_node: string | null;
 }
 
+// ─── Deliverable API ─────────────────────────────────────────────────────────
+
+export interface DeliverableCitation {
+  start_offset?: number;
+  end_offset?: number;
+  chunk_index?: number;
+  page_number?: number;
+  section_id?: string;
+  clause_ref?: string;
+  snippet?: string;
+}
+
+export interface DeliverableClaim {
+  claim_id: string;
+  claim_type: string;
+  extracted_text: string;
+  confidence: number;
+  source_document_id: string;
+  /** "grounded" | "unverifiable" — unverifiable ⇒ no source span (Prompt 3.6) */
+  citation_status: string;
+  /** Absent when the extraction stage recorded no source span */
+  citation?: DeliverableCitation | null;
+}
+
+export interface DeliverableSection {
+  key: string;
+  content_hash: string;
+  claims: DeliverableClaim[];
+}
+
+export interface RunDeliverable {
+  run_id: string;
+  deliverable_hash: string;
+  section_count: number;
+  claim_count: number;
+  sections: Record<string, DeliverableSection>;
+  created_at: string;
+}
+
+/**
+ * Fetch the persisted deliverable for a run (assembled by finalize,
+ * updated by Movement 3 incremental updates).
+ */
+export async function fetchRunDeliverable(runId: string): Promise<RunDeliverable> {
+  const response = await fetch(`${BASE_URL}/runs/${runId}/deliverable`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch deliverable: ${response.status}`);
+  }
+  return response.json();
+}
+
+// ─── Findings audit-trail API ────────────────────────────────────────────────
+
+export interface FindingCitation {
+  claim_id?: string | null;
+  snippet?: string | null;
+  page_number?: number | null;
+  section_id?: string | null;
+  start_offset?: number | null;
+  end_offset?: number | null;
+  clause_ref?: string | null;
+  source_document_id?: string | null;
+}
+
+export interface FindingAuditEvent {
+  event_id: string;
+  timestamp: string;
+  action: string;
+  actor_id: string;
+  details: Record<string, unknown>;
+}
+
+/** status: pending | approved | rejected | unqueued */
+export interface FindingRecord {
+  finding_key: string;
+  claim_id?: string | null;
+  rule_id?: string | null;
+  description: string;
+  severity?: string | null;
+  evaluation_method?: string | null;
+  source_node?: string | null;
+  playbook_id?: string | null;
+  citations: FindingCitation[];
+  status: string;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  justification?: string | null;
+  queued_at?: string | null;
+  first_generated_at?: string | null;
+  events: FindingAuditEvent[];
+}
+
+export interface RunFindings {
+  run_id: string;
+  total: number;
+  pending: number;
+  resolved: number;
+  items: FindingRecord[];
+}
+
+/**
+ * Every finding ever generated for a run with its full audit trail
+ * (read directly from audit_events, joined with current queue status).
+ */
+export async function fetchRunFindings(runId: string): Promise<RunFindings> {
+  const response = await fetch(`${BASE_URL}/runs/${runId}/findings`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch findings: ${response.status}`);
+  }
+  return response.json();
+}
+
 /**
  * Get the full change history (audit trail) for a pipeline run.
  */
@@ -248,6 +361,55 @@ export interface PileDocumentItem {
   filename: string;
   mime_type: string;
   added_at: string;
+}
+
+// ─── Document fact view ──────────────────────────────────────────────────────
+
+export interface FactCitation {
+  start_offset: number;
+  end_offset: number;
+  snippet: string;
+  page_number: number | null;
+  section_id: string | null;
+}
+
+export interface DocumentFact {
+  field_name: string;
+  extracted_value: string | null; // null ⇒ "not found"
+  confidence: number | null;
+  extraction_method: string | null; // structured | llm | llm_fallback | regex_fallback
+  citation_status: 'grounded' | 'unverifiable' | 'not_found';
+  cited_span: FactCitation | null;
+}
+
+export interface DocumentFactsResponse {
+  document_id: string;
+  document_version_id: string;
+  filename: string;
+  classification: string | null;
+  run_id: string | null;
+  source_text: string;
+  facts: DocumentFact[];
+}
+
+/**
+ * Fetch every fact extracted from a document, with server-resolved
+ * citation snippets and the full source text for inline highlighting.
+ */
+export async function fetchDocumentFacts(
+  documentId: string,
+  runId?: string,
+): Promise<DocumentFactsResponse> {
+  const params = new URLSearchParams();
+  if (runId) params.set('run_id', runId);
+  const qs = params.toString();
+  const response = await fetch(
+    `${BASE_URL}/documents/${documentId}/facts${qs ? `?${qs}` : ''}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to fetch document facts: ${response.status}`);
+  }
+  return response.json();
 }
 
 export interface PileDetail {
