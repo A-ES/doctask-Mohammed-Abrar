@@ -163,10 +163,38 @@ class SQLHistoryStore:
 
 
 class SQLCostStore:
-    """SQLAlchemy-backed cost store reading from run_steps."""
+    """SQLAlchemy-backed cost store reading from run_steps.
+
+    Durable: costs live in the run_steps table, so they survive API
+    process restarts — same durability contract as the history store.
+    """
 
     def __init__(self, session_factory):
         self._session_factory = session_factory
+
+    def get_step_costs(self, run_id: str) -> list[dict[str, Any]]:
+        """Per-step cost rows for a run (CostStore protocol)."""
+        with self._session_factory() as session:
+            steps = session.execute(
+                select(RunStep)
+                .where(RunStep.run_id == uuid.UUID(run_id))
+                .order_by(RunStep.step_order)
+            ).scalars().all()
+
+            return [
+                {
+                    "step_name": step.step_name,
+                    "step_order": step.step_order,
+                    "status": step.status,
+                    "duration_ms": step.duration_ms,
+                    "input_tokens": step.input_tokens,
+                    "output_tokens": step.output_tokens,
+                    "cost_usd": float(step.cost_usd)
+                    if step.cost_usd is not None
+                    else None,
+                }
+                for step in steps
+            ]
 
     def get_run_cost(self, run_id: str) -> dict[str, Any]:
         with self._session_factory() as session:

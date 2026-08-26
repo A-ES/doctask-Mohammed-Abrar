@@ -163,3 +163,21 @@ A pile can optionally have a `watched_folder_path` in its metadata (set via `PAT
 | 2026-08-24 | B-fixer followups: human_review enqueue dedup + 'completed_with_persistence_gap' run status (migration 013) | _node_human_review now dedups by claim_id exactly like populate-queue's backfill, so node re-execution can't create duplicate pending items. Durability writes (claims/source_locations, audit_events) retry ONCE then flag `_persistence_gap`; the run then ends 'completed_with_persistence_gap' instead of a plain 'completed', visible in GET /runs without opening details. Deliberate cuts, documented not fixed: B2's transient-finalize-failure handling and B4's checkpoint-before-audit ordering window remain as-is. Tests: tests/test_persistence_gap_fixes.py. |
 
 **Approval queue is now Postgres-backed** (`src/pipeline/approval_postgres.py`), replacing the in-memory store whose contents were lost on every restart: enqueue → one `approval_queue` row; decide → atomic INSERT into `decisions` + status transition under `SELECT ... FOR UPDATE` (the Phase 2.3 guard trigger enforces decision-before-status ordering). Durability across a real process restart is proven by `tests/test_approval_persistence_restart.py` (subprocess phases) and verified live against the dockerized API (`docker compose restart api` between seed and read).
+
+## 2026-08-26 — Documentation audit: info files synced to current state
+
+Full drift audit of README/src/tests docs against code. Corrections:
+
+| Doc claim (stale) | Actual state |
+|---|---|
+| 8 migrations / 10 tables | 15 migrations / 13 tables (`piles`, `pile_documents`, `deliverables`) |
+| "No real LLM calls" | DeepSeek client wired (`src/llm/deepseek_client.py`), env-gated; used by `demo_executor.run_pipeline` with SSE streaming |
+| "No LangGraph runtime" | langgraph installed (1.2.x); `graph.py` compiles a real `StateGraph`; custom executor still owns checkpointing |
+| "Regex extraction as default" (DECISIONS PENDING) | Implemented as **hybrid**: structured-first + field-level LLM fallback for known types; LLM-only path for unregistered types; per-claim `_extraction_method` recorded (migration 014); verbatim-quote citation strategy with `citation_status: unverifiable` downgrade |
+| "embed node is a no-op stub" | Fully implemented behind `EmbeddingService`/`VectorStore` protocols; no default provider configured |
+| MCP 6 tools | 8 tools (+ `get_run_cost`, `cancel_run`) |
+| "870+ tests (25 property-based)" / "886 total" | 1,078 collected; ~95 property-based cases across 25 Hypothesis modules |
+
+**Known issue surfaced by audit:** `tests/test_concurrency.py` failed collection — imported `ThreadSafeCheckpointStore`, removed from `src/pipeline/stores.py` in commit ac65af8 ("removing mock / dead elements"). **Resolved same day:** the store now lives in the test file itself (matching the convention of test_resumability's local InMemoryCheckpointStore), rebuilt as genuinely thread-safe — mutex-guarded step rows keyed `(run_id, step_order)` plus atomic per-run_id `threading.Lock`s with the executor's blocking-wait protocol (`_get_run_lock`). All 5 concurrency tests pass; full non-DB suite green (1,065 passed).
+
+Updated: `README.md`, `src/README.md`, `tests/README.md`, `docs/invariants.md` (section renumbering), recreated `frontend/README.md`. DECISIONS.md pending extraction item marked RESOLVED with implementation evidence.

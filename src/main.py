@@ -35,6 +35,10 @@ from src.models.documents import Document, DocumentVersion
 from src.models.piles import Pile, PileDocument
 from src.models.runs import Run, RunStep
 from src.pipeline.approval import ApprovalService
+from src.pipeline.citation_payload import (
+    build_source_citation,
+    resolve_evaluation_method,
+)
 from src.pipeline.approval_api import router as approval_router, set_approval_service
 from src.pipeline.approval_postgres import PostgresApprovalStore
 from src.pipeline.api import router as runs_router
@@ -120,6 +124,22 @@ async def lifespan(app: FastAPI):
     from src.pipeline.history_sql import SQLHistoryStore
 
     set_history_store(SQLHistoryStore(SessionLocal))
+
+    # Cost endpoint: same durable pattern as history — read run_steps
+    # from Postgres so cost data survives process restarts (B4 gap).
+    from src.pipeline.services import registry
+    from src.pipeline.stores import SQLCostStore
+
+    registry.configure(cost_store=SQLCostStore(SessionLocal))
+
+    # Review-queue enrichment: read-side join over run_steps/config so the
+    # review page can surface retries, rule text, confidence+threshold and
+    # escalation reason without recomputing anything.
+    from src.pipeline.approval_api import set_queue_context_provider
+    from src.pipeline.queue_enrichment import make_db_context_provider
+
+    set_queue_context_provider(make_db_context_provider(SessionLocal))
+
     set_incremental_approval_service(service)
     logger.info("Application started. Approval service configured.")
     yield
@@ -127,6 +147,8 @@ async def lifespan(app: FastAPI):
     set_incremental_approval_service(None)
     set_claim_persister(None)
     set_history_store(None)
+    set_queue_context_provider(None)
+    registry.cost_store = None
     logger.info("Application shutdown.")
 
 
@@ -181,8 +203,13 @@ class StartPipelineRequest(BaseModel):
 
 
 class StartPipelineResponse(BaseModel):
-    """Response after starting a pipeline run."""
+    """Response after starting a pipeline run.
+
+    run_id is the primary run (the first document). For pile starts,
+    run_ids carries every per-document run created for the pile.
+    """
     run_id: str
+    run_ids: list[str] = []
     status: str
 
 
@@ -239,7 +266,13 @@ async def start_pipeline(
                     detail="Pile has no documents. Upload documents before starting a run.",
                 )
 
-        # --- Resolve primary document ---
+        # --- Resolve documents to process into per-document run specs ---
+        # A run executes one document's pipeline pass (run_steps is unique
+        # per (run_id, step_order)), so a pile start fans out into one run
+        # per pile document (invariant 10: starting a run against a pile
+        # processes ALL of the pile's documents).
+        run_specs: list[dict] = []
+
         if request.document_id and request.document_version_id:
             # Explicit single-document mode (or pile + explicit primary doc)
             doc = session.execute(
@@ -256,56 +289,46 @@ async def start_pipeline(
             if version is None:
                 raise HTTPException(status_code=404, detail="Document version not found")
 
-            storage_path = version.storage_ref
-            mime_type = doc.mime_type
-            filename = doc.filename
-            primary_doc_id = request.document_id
-            primary_version_id = request.document_version_id
+            run_specs.append({
+                "document_id": request.document_id,
+                "document_version_id": request.document_version_id,
+                "storage_path": version.storage_ref,
+                "mime_type": doc.mime_type,
+                "filename": doc.filename,
+            })
 
         elif pile_document_ids:
-            # Pile-first mode: validate all pile documents have versions,
-            # then use first pile document as primary input.
-            missing_version_docs: list[str] = []
+            # Pile-first mode: one run per pile document. Validate every
+            # document has a usable version and snapshot its latest version
+            # now (invariant 12: the pile's document list is fixed at
+            # run-start; later additions are invisible to this run).
             for pd_id in pile_document_ids:
-                has_version = session.execute(
-                    select(DocumentVersion.id)
-                    .where(DocumentVersion.document_id == uuid.UUID(pd_id))
-                    .limit(1)
+                doc = session.execute(
+                    select(Document).where(Document.id == uuid.UUID(pd_id))
                 ).scalar_one_or_none()
-                if has_version is None:
-                    # Look up filename for a useful error message
-                    pd_doc = session.execute(
-                        select(Document).where(Document.id == uuid.UUID(pd_id))
-                    ).scalar_one_or_none()
-                    label = pd_doc.filename if pd_doc else pd_id
-                    missing_version_docs.append(label)
+                if doc is None:
+                    raise HTTPException(status_code=500, detail=f"Pile document not found in DB: {pd_id}")
 
-            if missing_version_docs:
-                names = ", ".join(missing_version_docs)
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"The following pile documents have no usable version: {names}. "
-                           "Re-upload these documents before starting the pipeline.",
-                )
+                version = session.execute(
+                    select(DocumentVersion)
+                    .where(DocumentVersion.document_id == doc.id)
+                    .order_by(DocumentVersion.version_number.desc())
+                ).scalars().first()
+                if version is None:
+                    label = doc.filename or pd_id
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Pile document has no usable version: {label}. "
+                               "Re-upload this document before starting the pipeline.",
+                    )
 
-            first_doc_id = pile_document_ids[0]
-            doc = session.execute(
-                select(Document).where(Document.id == uuid.UUID(first_doc_id))
-            ).scalar_one_or_none()
-            if doc is None:
-                raise HTTPException(status_code=500, detail="Pile document not found in DB")
-
-            version = session.execute(
-                select(DocumentVersion)
-                .where(DocumentVersion.document_id == doc.id)
-                .order_by(DocumentVersion.version_number.desc())
-            ).scalars().first()
-
-            storage_path = version.storage_ref
-            mime_type = doc.mime_type
-            filename = doc.filename
-            primary_doc_id = str(doc.id)
-            primary_version_id = str(version.id)
+                run_specs.append({
+                    "document_id": str(doc.id),
+                    "document_version_id": str(version.id),
+                    "storage_path": version.storage_ref,
+                    "mime_type": doc.mime_type,
+                    "filename": doc.filename,
+                })
 
         else:
             raise HTTPException(
@@ -313,22 +336,24 @@ async def start_pipeline(
                 detail="Provide pile_id or both document_id and document_version_id.",
             )
 
-        # Create run record
-        run_id = str(uuid.uuid4())
-        run = Run(
-            id=uuid.UUID(run_id),
-            status="pending",
-            config_snapshot={
-                "document_id": primary_doc_id,
-                "document_version_id": primary_version_id,
-                "pile_document_ids": pile_document_ids or [primary_doc_id],
-                **(request.config_overrides or {}),
-            },
-            initiator="api",
-            version=1,
-            pile_id=pile_uuid,
-        )
-        session.add(run)
+        # Create one run record per document
+        for spec in run_specs:
+            run_id = str(uuid.uuid4())
+            spec["run_id"] = run_id
+            run = Run(
+                id=uuid.UUID(run_id),
+                status="pending",
+                config_snapshot={
+                    "document_id": spec["document_id"],
+                    "document_version_id": spec["document_version_id"],
+                    "pile_document_ids": pile_document_ids or [spec["document_id"]],
+                    **(request.config_overrides or {}),
+                },
+                initiator="api",
+                version=1,
+                pile_id=pile_uuid,
+            )
+            session.add(run)
         session.commit()
     except HTTPException:
         raise
@@ -338,19 +363,44 @@ async def start_pipeline(
     finally:
         session.close()
 
-    # Start pipeline execution in background
+    # Start pipeline execution in background — every document's run
+    # executes, so the whole pile is analysed (invariant 10).
     background_tasks.add_task(
-        _execute_pipeline_background,
-        run_id=run_id,
-        document_id=primary_doc_id,
-        document_version_id=primary_version_id,
-        storage_path=storage_path,
-        mime_type=mime_type,
-        filename=filename,
+        _execute_pile_background,
+        run_specs=run_specs,
         config_overrides=request.config_overrides,
     )
 
-    return StartPipelineResponse(run_id=run_id, status="started")
+    return StartPipelineResponse(
+        run_id=run_specs[0]["run_id"],
+        run_ids=[spec["run_id"] for spec in run_specs],
+        status="started",
+    )
+
+
+async def _execute_pile_background(
+    run_specs: list[dict],
+    config_overrides: Optional[dict] = None,
+) -> None:
+    """Background task that runs every per-document pipeline of a pile start.
+
+    Documents execute sequentially: each run makes many LLM calls and the
+    client has no retry/backoff, so piling on concurrent requests would
+    trade fact quality for speed. Each run is an independent
+    single-document pipeline writing to its own rows (invariant 12), and a
+    run whose executor crashes is marked failed so it can never dangle as
+    "running".
+    """
+    for spec in run_specs:
+        await _execute_pipeline_background(
+            run_id=spec["run_id"],
+            document_id=spec["document_id"],
+            document_version_id=spec["document_version_id"],
+            storage_path=spec["storage_path"],
+            mime_type=spec["mime_type"],
+            filename=spec["filename"],
+            config_overrides=config_overrides,
+        )
 
 
 async def _execute_pipeline_background(
@@ -1026,9 +1076,9 @@ def _generate_summary(verdict: str, non_compliant: int, indeterminate: int, comp
 async def delete_run(run_id: str) -> dict:
     """Delete a pipeline run and its associated data.
 
-    Hard-deletes run_steps and claims rows, then the run row itself.
-    Uses core-level deletes to bypass ORM version checks.
-    This is irreversible.
+    Hard-deletes all dependent rows (decisions, approval-queue entries,
+    source_locations, claims, run_steps) in FK-safe order, then the run
+    row itself. This is irreversible.
     """
     session = SessionLocal()
     try:
@@ -1039,23 +1089,9 @@ async def delete_run(run_id: str) -> dict:
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        run_uuid = uuid.UUID(run_id)
+        from src.pipeline.run_cleanup import delete_run_and_dependents
 
-        # Delete dependent rows first (FK constraints) using core-level deletes
-        # to avoid ORM version_id checks
-        from src.models.runs import RunStep as RunStepModel
-        from src.models.claims import Claim
-
-        session.execute(
-            RunStepModel.__table__.delete().where(RunStepModel.__table__.c.run_id == run_uuid)
-        )
-        session.execute(
-            Claim.__table__.delete().where(Claim.__table__.c.run_id == run_uuid)
-        )
-        # Delete the run itself via core table delete (bypasses OCC version check)
-        session.execute(
-            Run.__table__.delete().where(Run.__table__.c.id == run_uuid)
-        )
+        delete_run_and_dependents(session, run_id)
         session.commit()
 
         return {"id": run_id, "status": "deleted"}
@@ -1123,7 +1159,6 @@ async def populate_approval_queue(run_id: str) -> dict:
             claim_data = claim_map.get(claim_id, {})
             claim_text = claim_data.get("claim_text", claim_id)
             confidence = claim_data.get("confidence", 0)
-            citation_status = claim_data.get("citation_status", "grounded")
 
             approval_service.enqueue_item(
                 run_id=run_id,
@@ -1134,15 +1169,17 @@ async def populate_approval_queue(run_id: str) -> dict:
                         "claim_id": claim_id,
                         "confidence": confidence,
                         "severity": "medium" if confidence < 0.7 else "low",
-                        "evaluation_method": "llm",
+                        "evaluation_method": resolve_evaluation_method(
+                            claim_data, output.get("claim_findings", [])
+                        ),
                     },
                     "source_citations": [
-                        {
-                            "claim_id": claim_id,
-                            "claim_text": claim_text,
-                            "citation_status": citation_status,
-                            "source_location": None,
-                        }
+                        build_source_citation(
+                            claim_data,
+                            document_id=output.get("document_id"),
+                            document_version_id=output.get("document_version_id"),
+                            extracted_text=output.get("extracted_text"),
+                        )
                     ],
                 },
             )

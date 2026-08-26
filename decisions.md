@@ -100,3 +100,15 @@ The rules checking stage already made this transition: LLM is the default evalua
 **Alternatives considered:**
 - Adding more regex patterns. Rejected: infinite regression — each new phrasing requires new patterns, and the combinatorial space of natural language is unbounded.
 - Hybrid approach (regex first, LLM fallback). Considered viable but adds complexity. Simpler to default to LLM and use regex only where speed/determinism is critical.
+
+## 2026-08-26 – Extraction brittleness: RESOLVED — hybrid structured-first with field-level LLM fallback
+
+**Status:** The 2026-08-12 PENDING decision above is now implemented, landing closer to the "hybrid" alternative than the pure LLM-default originally sketched:
+
+- **Registered document types** (loan, modification, repayment): the structured extractor runs first; every field it misses (`not_found`) is re-extracted by the LLM and merged (structured wins where found). Per-claim `_extraction_method` records `structured` vs `llm_fallback` (migration 014 `claim_field_and_method`).
+- **Unregistered types:** LLM-only extraction path.
+- **Citation strategy for LLM-extracted fields:** the model returns a verbatim quoted span per field; exact string match locates it in source text to compute character offsets (normalized match as fallback); on total failure the claim is kept but marked `citation_status: "unverifiable"` with a zeroed span — never silently unanchored.
+
+**Implementation:** `src/pipeline/nodes/extract_claims.py` (`_dispatch_type_specific_with_fallback`), `src/pipeline/extractors/llm_extractor.py`. Evidence: `tests/test_paraphrased_extraction.py`, `tests/test_unverifiable_citation_e2e.py`.
+
+**Why hybrid over pure LLM-default:** structured extraction is free, deterministic, and already correct for template-mandated formats (bank-generated repayment tables); routing everything through the LLM would add latency/cost exactly where determinism was working. The paraphrase experiment showed the failure mode is *missing fields*, which field-level fallback fixes without re-running whole documents.

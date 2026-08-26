@@ -23,6 +23,10 @@ export interface SourceCitation {
   claim_text: string;
   citation_status: "grounded" | "unverifiable";
   source_location: SourceLocation | null;
+  /** Document the span points into — a citation without this is not
+   *  auditable (spans are meaningless across re-uploads/pile documents). */
+  document_id?: string | null;
+  document_version_id?: string | null;
   snippet?: string;
   snippet_context_before?: string;
   snippet_context_after?: string;

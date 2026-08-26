@@ -79,12 +79,24 @@ class QueueListResponse(BaseModel):
 # --- Dependency injection ---
 
 _approval_service: Optional[ApprovalService] = None
+_queue_context_provider: Optional[Any] = None
 
 
 def set_approval_service(service: Optional[ApprovalService]) -> None:
     """Set the approval service (for testing/configuration)."""
     global _approval_service
     _approval_service = service
+
+
+def set_queue_context_provider(provider: Optional[Any]) -> None:
+    """Set the per-run review-context provider (read-side enrichment).
+
+    Called with a run_id, returns the context dict used to surface
+    retries / rule text / confidence+threshold / escalation reason on
+    queue items. Injectable for testing; None disables enrichment.
+    """
+    global _queue_context_provider
+    _queue_context_provider = provider
 
 
 def get_approval_service() -> ApprovalService:
@@ -106,7 +118,7 @@ def _item_to_response(item: QueueItem) -> QueueItemResponse:
         id=item.id,
         run_id=item.run_id,
         item_type=item.item_type,
-        payload=item.payload,
+        payload=_enrich_payload(item.run_id, item.payload),
         status=item.status.value,
         queued_at=item.queued_at.isoformat(),
         decided_at=item.decided_at.isoformat() if item.decided_at else None,
@@ -114,6 +126,22 @@ def _item_to_response(item: QueueItem) -> QueueItemResponse:
         reviewer_id=item.reviewer_id,
         justification=item.justification,
     )
+
+
+def _enrich_payload(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Attach read-side provenance fields when a provider is wired."""
+    if _queue_context_provider is None:
+        return payload
+    try:
+        context = _queue_context_provider(run_id)
+    except Exception:
+        # Enrichment must never break serving the queue.
+        return payload
+    if not context:
+        return payload
+    from src.pipeline.queue_enrichment import enrich_item_details
+
+    return enrich_item_details(payload, context)
 
 
 # --- Router ---

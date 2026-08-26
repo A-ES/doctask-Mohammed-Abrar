@@ -119,6 +119,31 @@ describe("DetailPanel", () => {
     expect(screen.getByText("100–200")).toBeInTheDocument();
   });
 
+  // Prompt 4.3: the reviewer must see the method that actually ran —
+  // a deterministic rule finding arrives labeled "structured" (from the
+  // enqueue-time resolver) and must render as such, not as "llm".
+  it("renders evaluation_method: structured for a deterministic rule finding", () => {
+    const structuredItem: QueueItem = {
+      ...mockItem,
+      payload: {
+        ...mockItem.payload,
+        details: {
+          claim_id: "loan_agreement.apr_1",
+          rule_id: "USURY-36.1",
+          severity: "high",
+          evaluation_method: "structured",
+        },
+      },
+    };
+    render(
+      <DetailPanel item={structuredItem} onDecide={vi.fn()} isSubmitting={false} />
+    );
+
+    expect(screen.getByText("evaluation_method:")).toBeInTheDocument();
+    expect(screen.getByText("structured")).toBeInTheDocument();
+    expect(screen.queryByText("llm")).not.toBeInTheDocument();
+  });
+
   it("renders DecisionControls with approve/reject buttons for pending items", () => {
     render(
       <DetailPanel item={mockItem} onDecide={vi.fn()} isSubmitting={false} />

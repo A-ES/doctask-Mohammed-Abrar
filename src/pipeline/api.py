@@ -689,6 +689,8 @@ class FindingCitationResponse(BaseModel):
     end_offset: int | None = None
     clause_ref: str | None = None
     source_document_id: str | None = None
+    document_id: str | None = None
+    document_version_id: str | None = None
 
 
 class FindingAuditEventResponse(BaseModel):
@@ -885,6 +887,10 @@ def get_run_findings_endpoint(run_id: str) -> RunFindingsResponse:
                 merged.extend(citations_by_claim[claim_id])
             for c in payload_citations or []:
                 loc = c.get("source_location") if isinstance(c, dict) else None
+                doc_id = c.get("document_id") if isinstance(c, dict) else None
+                doc_ver = (
+                    c.get("document_version_id") if isinstance(c, dict) else None
+                )
                 if loc:
                     merged.append(
                         {
@@ -895,10 +901,19 @@ def get_run_findings_endpoint(run_id: str) -> RunFindingsResponse:
                             "start_offset": loc.get("start_offset"),
                             "end_offset": loc.get("end_offset"),
                             "clause_ref": loc.get("clause_ref"),
+                            "document_id": doc_id,
+                            "document_version_id": doc_ver,
                         }
                     )
                 elif isinstance(c, dict):
-                    merged.append({"claim_id": c.get("claim_id"), "snippet": c.get("snippet")})
+                    merged.append(
+                        {
+                            "claim_id": c.get("claim_id"),
+                            "snippet": c.get("snippet"),
+                            "document_id": doc_id,
+                            "document_version_id": doc_ver,
+                        }
+                    )
             return merged
 
         # ── Assemble queue-backed findings ──

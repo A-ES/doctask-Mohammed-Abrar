@@ -10,6 +10,6 @@ describe('App', () => {
         <App />
       </MemoryRouter>
     )
-    expect(screen.getByText('SuperDocs')).toBeInTheDocument()
+    expect(screen.getAllByText('Anchora').length).toBeGreaterThan(0)
   })
 })

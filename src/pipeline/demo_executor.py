@@ -21,6 +21,10 @@ from typing import Any, Optional
 
 from src.llm.deepseek_client import chat_completion, chat_completion_json
 from src.pipeline.cancel import is_cancelled
+from src.pipeline.citation_payload import (
+    build_source_citation,
+    resolve_evaluation_method,
+)
 from src.pipeline.config import PipelineConfig, load_config
 from src.pipeline.history_sql import (
     emit_node_completed,
@@ -771,6 +775,9 @@ Respond with JSON: {"verdicts": [{"claim_id": "...", "verdict": "compliant|non_c
                     "verdict": verdict_val,
                     "reason": v.get("reason", ""),
                     "source": "match_rules",
+                    # This path evaluated via DeepSeek — record it so the
+                    # enqueue-time resolver doesn't have to guess.
+                    "evaluation_method": "llm",
                 })
 
     except Exception as e:
@@ -1040,7 +1047,6 @@ async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
         claim_data = claim_map.get(claim_id, {})
         claim_text = claim_data.get("claim_text", claim_id)
         confidence = claim_data.get("confidence", 0)
-        citation_status = claim_data.get("citation_status", "grounded")
 
         # Build payload matching the frontend QueueItemPayload shape:
         #   { summary, details, source_citations[] }
@@ -1050,15 +1056,17 @@ async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
                 "claim_id": claim_id,
                 "confidence": confidence,
                 "severity": "medium" if confidence < 0.7 else "low",
-                "evaluation_method": "llm",
+                "evaluation_method": resolve_evaluation_method(
+                    claim_data, state.get("claim_findings", [])
+                ),
             },
             "source_citations": [
-                {
-                    "claim_id": claim_id,
-                    "claim_text": claim_text,
-                    "citation_status": citation_status,
-                    "source_location": None,
-                }
+                build_source_citation(
+                    claim_data,
+                    document_id=state.get("document_id"),
+                    document_version_id=state.get("document_version_id"),
+                    extracted_text=state.get("extracted_text"),
+                )
             ],
         }
 

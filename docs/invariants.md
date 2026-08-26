@@ -1,5 +1,9 @@
 # Invariants
 
+> **Note on numbering:** Sections 6–8 were removed during refactoring. The remaining
+> numbers are kept stable so external references (e.g., comments in `src/main.py`,
+> test docstrings) continue to resolve correctly. Do not renumber.
+
 ## Checkpointed Resumability
 
 These invariants are absolute — violations are treated as system bugs, never acceptable trade-offs.

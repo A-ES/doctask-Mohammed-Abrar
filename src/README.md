@@ -2,7 +2,7 @@
 
 ## Models (`src/models/`)
 
-SQLAlchemy declarative models for the PostgreSQL schema (10 tables).
+SQLAlchemy declarative models for the PostgreSQL schema (13 tables).
 
 | Module | Tables |
 |--------|--------|
@@ -11,7 +11,17 @@ SQLAlchemy declarative models for the PostgreSQL schema (10 tables).
 | `claims.py` | claims, source_locations |
 | `approval.py` | approval_queue, decisions |
 | `audit.py` | audit_events |
+| `piles.py` | piles, pile_documents |
 | `schema_migrations.py` | schema_migrations |
+
+(`deliverables` is created by migration 011 and accessed via `deliverable_store.py`.)
+
+## LLM Client (`src/llm/`)
+
+`deepseek_client.py` — OpenAI-compatible async client for DeepSeek. Activated by
+env vars (`DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`); used by
+classification, extraction, rule evaluation, and confidence scoring. Tests inject
+mock `LLMClient` protocol implementations instead.
 
 ## Pipeline (`src/pipeline/`)
 
@@ -28,12 +38,24 @@ LangGraph pipeline implementation — 3 stages, 13 nodes, conditional routing.
 | `checkpoint.py` | `write_checkpoint()` / `create_step_row()` — per-node snapshots |
 | `resume.py` | `resume_run()` — restore from last checkpoint, determine next node |
 | `executor.py` | `ResumableExecutor` — sequential node runner with checkpoint-based skip-on-resume |
-| `stores.py` | `ThreadSafeCheckpointStore` — thread-safe in-memory store for concurrent execution |
-| `approval.py` | `ApprovalService` + `InMemoryApprovalStore` — queue management, per-item atomic decisions |
+| `demo_executor.py` | Real-run executor: drives nodes with DeepSeek calls, SSE events, durability writes, persistence-gap status |
+| `graph.py` | `build_graph()` — LangGraph StateGraph assembly with all nodes and edges |
+| `stores.py` | SQL stores: `SQLRunStore`, `SQLResumeStore`, `SQLHistoryStore`, `SQLCostStore`; plus `InMemoryExecutorStore` for tests |
+| `cancel.py` / `run_cleanup.py` | Run cancellation + hard-delete cleanup of dependent rows |
+| `watcher.py` | Run state watching for SSE broadcast |
+| `approval.py` | `ApprovalService` + in-memory store; `approval_postgres.py` adds the durable Postgres-backed store (survives restarts) |
 | `approval_api.py` | FastAPI router: `POST /approval/items/{id}/decide`, queue listing |
+| `incremental.py` / `incremental_api.py` | Incremental pile updates; contradictions enqueue as `item_type="conflict"` approval items (no silent overwrite) |
+| `deliverable.py` / `deliverable_store.py` | Deliverable assembly, section hashes, approved-output storage |
+| `history_service.py` / `history_sql.py` | Change history over audit_events (what changed, when, why) |
+| `source_linker.py` | Attaches fact source spans → `source_locations` rows |
+| `citation_payload.py` | Grounded vs unverifiable citation payload construction |
+| `queue_enrichment.py` | Enriches queue items with claim/document context for reviewers |
 | `services.py` | Shared service functions called by both REST and MCP (no separate logic paths) |
-| `graph.py` | `build_graph()` — StateGraph assembly with all nodes and edges |
-| `api.py` | FastAPI router: `POST /runs`, `POST /runs/{id}/resume` |
+| `api.py` | Runs router: start, resume, list, state, node details, cost, report, stream, delete |
+| `piles_api.py` | Pile CRUD + document upload router |
+| `upload_api.py` | File upload handling router |
+| `facts_api.py` | Claim/fact inspection endpoints |
 | `polling.py` | `PollingService` — checks decisions, triggers resume, sends reminders |
 | `playbook.py` | Pydantic playbook schema (`RuleDefinition`, `Playbook`), loader, rule partitioner |
 | `evaluators.py` | `RuleEvaluator` protocol, `LLMEvaluator` (batch), `StructuredEvaluator` (deterministic) |
@@ -66,7 +88,9 @@ The `ResumableExecutor` runs a sequence of nodes with checkpoint-based resumabil
 - Acquires per-`run_id` lock to prevent double-execution of the same run.
 - Accepts a `crash_after` parameter for testing (simulates process kill between transitions).
 
-`ThreadSafeCheckpointStore` provides a thread-safe in-memory store for concurrent execution testing. All operations are serialized via `threading.Lock`, simulating Postgres row-level locking.
+`demo_executor.run_pipeline()` is the production path used by the API: it wires the DeepSeek client, emits SSE events per node, writes durable claims/source rows at node completion, and ends runs as `completed` or `completed_with_persistence_gap`.
+
+`InMemoryExecutorStore` provides an in-memory store for concurrent execution testing. All operations are serialized via `threading.Lock`, simulating Postgres row-level locking.
 
 ### Invariants Enforced
 
@@ -121,6 +145,8 @@ Exposes the same operations as the REST API via the Model Context Protocol (stdi
 | `decide_approval` | `item_id`, `decision`, `reviewer_id`, `justification` | `success`, `decision` |
 | `get_deliverable` | — | `sections{}`, `deliverable_hash` |
 | `get_change_history` | `run_id` | `entries[]`, `total` |
+| `get_run_cost` | `run_id` | token/cost totals per run |
+| `cancel_run` | `run_id` | cancellation result (checkpoints + audit events preserved) |
 
 ### Shared Service Layer (`src/pipeline/services.py`)
 

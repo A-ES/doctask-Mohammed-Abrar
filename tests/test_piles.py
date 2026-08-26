@@ -396,3 +396,55 @@ class TestPileIsolation:
         finally:
             _cleanup_pile(pile_a_id)
             _cleanup_pile(pile_b_id)
+
+
+class TestPileRunFanOut:
+    """A pile start must create one run per pile document (invariant 10)."""
+
+    def test_pile_start_creates_one_run_per_document(self):
+        """POST /runs/start with a 3-doc pile returns 3 run_ids, each
+        targeting a distinct pile document."""
+        resp = client.post("/piles", json={"name": "Fan Out Pile"})
+        pile_id = resp.json()["id"]
+
+        try:
+            files = [
+                ("files", ("fan_a.txt", io.BytesIO(b"alpha content"), "text/plain")),
+                ("files", ("fan_b.txt", io.BytesIO(b"beta content"), "text/plain")),
+                ("files", ("fan_c.txt", io.BytesIO(b"gamma content"), "text/plain")),
+            ]
+            upload_resp = client.post(f"/piles/{pile_id}/documents", files=files)
+            assert upload_resp.status_code == 200
+            uploaded_doc_ids = {d["document_id"] for d in upload_resp.json()["uploaded"]}
+
+            run_resp = client.post("/runs/start", json={"pile_id": pile_id})
+            assert run_resp.status_code == 200, run_resp.text
+            run_data = run_resp.json()
+
+            assert run_data["status"] == "started"
+            run_ids = run_data["run_ids"]
+            assert len(run_ids) == 3
+            assert run_data["run_id"] == run_ids[0]
+
+            session = SessionLocal()
+            try:
+                rows = session.execute(
+                    Run.__table__.select().where(
+                        Run.__table__.c.id.in_([uuid.UUID(r) for r in run_ids])
+                    )
+                ).fetchall()
+                assert len(rows) == 3
+
+                target_docs = set()
+                for row in rows:
+                    assert str(row.pile_id) == pile_id
+                    target_docs.add(row.config_snapshot["document_id"])
+                    # Every run snapshots the full pile document list
+                    assert set(row.config_snapshot["pile_document_ids"]) == uploaded_doc_ids
+
+                # Each run targets a distinct document, covering the pile
+                assert target_docs == uploaded_doc_ids
+            finally:
+                session.close()
+        finally:
+            _cleanup_pile(pile_id)

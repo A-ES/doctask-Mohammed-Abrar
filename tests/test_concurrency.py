@@ -22,7 +22,96 @@ import pytest
 from src.pipeline.config import load_config
 from src.pipeline.executor import ResumableExecutor
 from src.pipeline.state import PipelineState, create_initial_state
-from src.pipeline.stores import ThreadSafeCheckpointStore
+
+
+# ---------------------------------------------------------------------------
+# Thread-safe in-memory checkpoint store (implements ExecutorStore protocol)
+# ---------------------------------------------------------------------------
+
+
+class ThreadSafeCheckpointStore:
+    """In-memory checkpoint store safe for genuine multi-threaded access.
+
+    Unlike the sequential-test store in test_resumability.py, every operation
+    serializes on an internal mutex and per-run_id execution locks are real
+    threading.Lock objects (atomic check-and-set), because racing threads is
+    exactly what these tests exercise. Step rows are keyed by (run_id,
+    step_order) so concurrent runs sharing one store stay fully isolated.
+    """
+
+    def __init__(self) -> None:
+        self._mutex = threading.Lock()
+        self.steps: dict[tuple[str, int], dict[str, Any]] = {}
+        self._locks: dict[str, threading.Lock] = {}
+
+    def _get_run_lock(self, run_id: str) -> threading.Lock:
+        with self._mutex:
+            if run_id not in self._locks:
+                self._locks[run_id] = threading.Lock()
+            return self._locks[run_id]
+
+    def acquire_run_lock(self, run_id: str) -> bool:
+        return self._get_run_lock(run_id).acquire(blocking=False)
+
+    def release_run_lock(self, run_id: str) -> None:
+        try:
+            self._get_run_lock(run_id).release()
+        except RuntimeError:
+            pass
+
+    def create_step(self, run_id: str, step_name: str, step_order: int) -> None:
+        with self._mutex:
+            self.steps[(run_id, step_order)] = {
+                "run_id": run_id,
+                "step_name": step_name,
+                "step_order": step_order,
+                "status": "running",
+                "output_state": None,
+                "ended_at": None,
+            }
+
+    def write_checkpoint(
+        self,
+        run_id: str,
+        step_name: str,
+        step_order: int,
+        output_state: dict[str, Any],
+        status: str,
+        ended_at: Any,
+        **kwargs: Any,
+    ) -> None:
+        with self._mutex:
+            key = (run_id, step_order)
+            if key not in self.steps:
+                raise RuntimeError(f"Step row not found: {key}")
+            row = self.steps[key]
+            row["output_state"] = output_state
+            row["status"] = status
+            row["ended_at"] = ended_at
+
+    def get_last_checkpoint(self, run_id: str) -> Optional[dict[str, Any]]:
+        with self._mutex:
+            candidates = [
+                dict(row)
+                for (rid, _), row in self.steps.items()
+                if rid == run_id and row["status"] in ("completed", "skipped")
+            ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda r: r["step_order"])
+
+    def mark_orphaned_running_as_failed(self, run_id: str) -> int:
+        with self._mutex:
+            count = 0
+            for (rid, _), row in self.steps.items():
+                if (
+                    rid == run_id
+                    and row["status"] == "running"
+                    and row["ended_at"] is None
+                ):
+                    row["status"] = "failed"
+                    count += 1
+            return count
 
 
 # ---------------------------------------------------------------------------

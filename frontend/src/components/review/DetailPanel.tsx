@@ -3,6 +3,7 @@ import type { QueueItem } from "@/types/review";
 import { PayloadView } from "./PayloadView";
 import { CitationList } from "./CitationList";
 import { SourceLocationTable } from "./SourceLocationTable";
+import { ProvenancePanel } from "./ProvenancePanel";
 import { DecisionControls } from "./DecisionControls";
 
 export interface DetailPanelProps {
@@ -60,6 +61,7 @@ export function DetailPanel({ item, onDecide, isSubmitting }: DetailPanelProps) 
       {/* Content */}
       <div className="relative flex flex-col gap-6 p-4 flex-1">
         <PayloadView item={item} />
+        <ProvenancePanel item={item} />
         <CitationList citations={item.payload.source_citations} />
         <SourceLocationTable citations={item.payload.source_citations} />
 

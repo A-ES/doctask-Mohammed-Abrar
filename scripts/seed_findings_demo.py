@@ -17,6 +17,7 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.database import SessionLocal
+from src.pipeline.citation_payload import build_source_citation
 from src.pipeline.history_sql import emit_audit_event, emit_decision_event
 
 
@@ -100,23 +101,56 @@ def _decide(session_factory, item_id: str, run_id: str, decision: str, reviewer:
     )
 
 
+def _resolve_document(session, run_id: str) -> dict:
+    """Resolve the run's document/version and load its source text."""
+    from pathlib import Path
+    from sqlalchemy import text as _text
+
+    row = session.execute(
+        _text(
+            """
+            SELECT dv.id AS version_id, dv.storage_ref,
+                   r.config_snapshot->>'document_id' AS document_id
+            FROM runs r
+            JOIN document_versions dv ON dv.document_id = r.config_snapshot->>'document_id'::uuid
+            WHERE r.id = CAST(:rid AS uuid)
+            ORDER BY dv.version_number DESC
+            LIMIT 1
+            """
+        ),
+        {"rid": uuid.UUID(run_id)},
+    ).first()
+    if row is None or not row.document_id:
+        return {}
+
+    path = Path(row.storage_ref)
+    source_text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else None
+    return {
+        "document_id": str(row.document_id),
+        "document_version_id": str(row.version_id),
+        "extracted_text": source_text,
+    }
+
+
 def main() -> None:
     run_id = sys.argv[1] if len(sys.argv) > 1 else None
 
     if not run_id:
-        from sqlalchemy import text
+    from sqlalchemy import text
 
-        with SessionLocal() as session:
-            row = session.execute(
-                text(
-                    "SELECT id FROM runs WHERE status = 'completed' "
-                    "ORDER BY started_at DESC LIMIT 1"
-                )
-            ).first()
-        if row is None:
-            print("ERROR: no completed run found", file=sys.stderr)
-            sys.exit(1)
-        run_id = str(row[0])
+    with SessionLocal() as session:
+        row = session.execute(
+            text(
+                "SELECT id FROM runs WHERE status = 'completed' "
+                "ORDER BY started_at DESC LIMIT 1"
+            )
+        ).first()
+    if row is None:
+        print("ERROR: no completed run found", file=sys.stderr)
+        sys.exit(1)
+    run_id = str(row[0])
+
+    doc = _resolve_document(SessionLocal(), run_id)
 
     pending_item = _enqueue_finding(
         SessionLocal,
@@ -130,18 +164,21 @@ def main() -> None:
                 "evaluation_method": "llm",
             },
             "source_citations": [
-                {
-                    "claim_id": "loan_agreement.interest_1",
-                    "claim_text": "The annual interest rate on the principal is 12.5% per annum.",
-                    "citation_status": "grounded",
-                    "source_location": {
-                        "page_number": 4,
-                        "section_id": "sec-3.1",
+                build_source_citation(
+                    {
+                        "claim_id": "loan_agreement.interest_1",
+                        "claim_text": "The annual interest rate on the principal is 12.5% per annum.",
+                        "citation_status": "grounded",
                         "start_offset": 1450,
                         "end_offset": 1520,
-                        "clause_ref": "§3.1.2",
                     },
-                }
+                    document_id=doc.get("document_id"),
+                    document_version_id=doc.get("document_version_id"),
+                    extracted_text=doc.get("extracted_text"),
+                    page_number=4,
+                    section_id="sec-3.1",
+                    clause_ref="§3.1.2",
+                )
             ],
         },
     )
