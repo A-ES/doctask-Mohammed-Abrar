@@ -6,7 +6,7 @@ from typing import Literal, Optional, TypedDict
 
 NodeStatus = Literal["completed", "skipped", "error"]
 ErrorType = Literal["transient", "permanent"]
-Verdict = Literal["compliant", "non_compliant", "indeterminate"]
+Verdict = Literal["compliant", "non_compliant", "indeterminate", "review_required"]
 DecisionValue = Literal["approved", "rejected"]
 
 

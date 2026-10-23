@@ -38,10 +38,17 @@ def build_deliverable_from_state(run_state: dict) -> Deliverable:
     """Build a hashed Deliverable from a run state's claims.
 
     Claims are grouped into sections by derived claim type; each claim
-    carries its source document and citation status so downstream
-    consumers can render citations.
+    carries its source document, citation status, and decision (if any)
+    so downstream consumers can render citations and reflect human reviews.
     """
     deliverable = Deliverable()
+
+    decisions_by_claim: dict[str, str] = {}
+    for d in run_state.get("decisions", []):
+        cid = d.get("claim_id")
+        dval = d.get("decision_value") or d.get("decision")
+        if cid and dval:
+            decisions_by_claim[cid] = dval
 
     for claim_data in run_state.get("claims", []):
         claim_id = claim_data.get("claim_id", str(uuid.uuid4()))
@@ -53,6 +60,8 @@ def build_deliverable_from_state(run_state: dict) -> Deliverable:
             claim_type = claim_id.rsplit("_", 1)[0] if "_" in claim_id else claim_id
         else:
             claim_type = f"generic.{claim_id}"
+
+        decision = claim_data.get("decision") or decisions_by_claim.get(claim_id)
 
         from src.pipeline.deliverable import SectionClaim
 
@@ -66,6 +75,7 @@ def build_deliverable_from_state(run_state: dict) -> Deliverable:
                     "document_id", "unknown"
                 ),
                 citation_status=claim_data.get("citation_status", "grounded"),
+                decision=decision,
             )
         )
 
@@ -88,6 +98,7 @@ def serialize_deliverable(deliverable: Deliverable) -> dict[str, Any]:
                     "confidence": c.confidence,
                     "source_document_id": c.source_document_id,
                     "citation_status": c.citation_status,
+                    **({"decision": c.decision} if getattr(c, "decision", None) is not None else {}),
                 }
                 for c in section.claims
             ],

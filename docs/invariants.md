@@ -97,20 +97,12 @@ These invariants are absolute — violations are treated as system bugs, never a
 
 ## Finding Integrity (Rules Checking Stage)
 
-13. **Findings are produced if and only if a rule evaluation returns verdict
-    "fail".** The rules checking stage never pads, forces, or synthesizes
-    findings. Specifically:
+13. **Findings are produced for actionable compliance events: confirmed violations (`verdict == "fail"`) and missing or unverifiable mandatory terms (`verdict == "review_required"`).** The rules checking stage never pads, forces, or synthesizes findings. Specifically:
 
-    - A Finding is produced only when `verdict == "fail"`. Verdicts of
-      `pass`, `not_applicable`, or `insufficient_evidence` never produce
-      findings.
-    - When no rules are violated, the findings list is empty — never
-      populated with synthetic entries.
-    - Every Finding carries the exact source span (start_offset, end_offset,
-      text) that triggered the violation. Offsets are absolute positions in
-      the original document.
-    - Every Finding records the evaluation_method ("llm" or "structured")
-      that produced it.
+    - A Finding is produced when `verdict == "fail"` or `verdict == "review_required"`. Verdicts of `pass` and `not_applicable` never produce findings.
+    - When all evaluated rules pass with no missing disclosures or unverifiable facts, the findings list is empty — never populated with synthetic entries.
+    - Every Finding carries the exact source span (start_offset, end_offset, text) that triggered the evaluation. Offsets are absolute positions in the original document.
+    - Every Finding records the evaluation_method ("llm" or "structured") that produced it.
 
 14. **Adding a compliance rule never requires modifying Python source files.**
     New rules are added by editing YAML playbook files under `rules/`. The

@@ -547,3 +547,69 @@ class TestMCPToolRegistration:
         assert callable(decide_approval_tool)
         assert callable(get_deliverable_tool)
         assert callable(get_change_history_tool)
+
+
+class TestMCPInProcessLive:
+    """Integration tests starting tools in-process against the real database."""
+
+    def test_start_run_tool_returns_real_run_id_for_seeded_pile(self):
+        """Starting tools in-process allows start_run_tool to return a real run_id for a seeded pile."""
+        from sqlalchemy import select
+        from scripts.seed_demo import seed_demo
+        from src.database import SessionLocal
+        from src.mcp_server import get_run_status_tool, setup_server, start_run_tool
+        from src.models.runs import Run
+        from src.pipeline.service_init import cleanup_services
+
+        # Seed the demo pile to guarantee a known pile exists
+        seed_result = seed_demo()
+        pile_id = seed_result.get("pile_id")
+        assert pile_id, f"Failed to get pile_id from seed_demo: {seed_result}"
+
+        try:
+            # Start the tools in-process (wires service registry from DATABASE_URL)
+            registry = setup_server(check_db=True)
+            assert registry.run_store is not None
+            assert registry.resume_store is not None
+
+            # Start run via MCP tool using the seeded pile_id
+            raw_response = start_run_tool(pile_id=pile_id)
+            result = json.loads(raw_response)
+
+            assert result.get("status") == "created"
+            assert result.get("error") is None
+            run_id = result.get("run_id")
+            assert run_id, "start_run_tool returned an empty run_id"
+
+            # Verify it is a valid UUID
+            run_uuid = uuid.UUID(run_id)
+
+            # Verify the run is persisted in Postgres with matching pile_id
+            with SessionLocal() as session:
+                persisted_run = session.execute(
+                    select(Run).where(Run.id == run_uuid)
+                ).scalar_one_or_none()
+                assert persisted_run is not None, f"Run {run_id} not found in database"
+                assert str(persisted_run.pile_id) == str(pile_id)
+                assert persisted_run.status == "pending"
+
+            # Check run status via MCP tool
+            status_raw = get_run_status_tool(run_id=run_id)
+            status_result = json.loads(status_raw)
+            assert status_result.get("run_id") == run_id
+            assert status_result.get("status") == "pending"
+        finally:
+            cleanup_services()
+
+    def test_unreachable_database_fails_fast(self):
+        """Configuring from an unreachable database URL fails fast with a clear message."""
+        from src.mcp_server import setup_server
+
+        unreachable_url = "postgresql://postgres:postgres@localhost:59999/docdb"
+        with pytest.raises(RuntimeError) as exc_info:
+            setup_server(database_url=unreachable_url, check_db=True)
+
+        err_msg = str(exc_info.value)
+        assert "Database is unreachable" in err_msg
+        assert "59999" in err_msg or "localhost" in err_msg
+

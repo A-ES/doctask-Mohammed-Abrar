@@ -30,10 +30,10 @@ export const useRunProgressStore = create<RunProgressState>((set) => ({
 
   setProgress: (progress: PipelineProgress) =>
     set({
-      currentNode: progress.current_node,
-      completedNodes: progress.completed_nodes,
-      nodeStatus: progress.node_status,
-      runStatus: progress.run_status,
+      currentNode: progress.current_node ?? null,
+      completedNodes: progress.completed_nodes ?? [],
+      nodeStatus: progress.node_status ?? null,
+      runStatus: (progress.run_status as RunProgressState["runStatus"]) ?? "running",
     }),
 
   setRuns: (runs: RunSummary[]) => set({ runs }),

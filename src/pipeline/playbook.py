@@ -64,7 +64,6 @@ class Playbook(BaseModel):
 
 PLAYBOOK_WHITELIST: dict[str, str] = {
     "microfinance_v1": "microfinance_v1.yaml",
-    "consumer_lending_v1": "consumer_lending_v1.yaml",
 }
 
 RULES_DIR = Path("rules")

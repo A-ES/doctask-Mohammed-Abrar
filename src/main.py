@@ -22,6 +22,8 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
+from fastapi.responses import JSONResponse
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -87,69 +89,20 @@ async def broadcast_sse(run_id: str, data: dict) -> None:
                 pass
 
 
+from src.pipeline.service_init import cleanup_services, init_services
+
 # ─── Application lifecycle ────────────────────────────────────────────────────
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup/shutdown lifecycle."""
-    # Initialize approval service with Postgres-backed store
-    # (durable across restarts via approval_queue/decisions tables).
-    store = PostgresApprovalStore(SessionLocal)
-    service = ApprovalService(store)
-    set_approval_service(service)
-    # Approval decisions land in the audit trail for /runs/{id}/history.
-    from src.pipeline.history_sql import emit_decision_event as _emit_decision
-
-    def _decision_listener(item_id, run_id, decision, reviewer_id, justification):
-        _emit_decision(
-            SessionLocal,
-            item_id=item_id,
-            run_id=run_id,
-            decision=decision,
-            reviewer_id=reviewer_id,
-            justification=justification,
-        )
-
-    service.set_decision_listener(_decision_listener)
-    # extract_claims node persists claims/source_locations at node
-    # completion (durable record); checkpoint JSONB stays for resumability.
-    from src.pipeline.nodes.extract_claims import set_claim_persister
-    from src.pipeline.source_linker import make_sql_claim_persister
-
-    set_claim_persister(make_sql_claim_persister(SessionLocal))
-
-    # Phase 5.2: history endpoint reads the audit_events table.
-    from src.pipeline.api import set_history_store
-    from src.pipeline.history_sql import SQLHistoryStore
-
-    set_history_store(SQLHistoryStore(SessionLocal))
-
-    # Cost endpoint: same durable pattern as history — read run_steps
-    # from Postgres so cost data survives process restarts (B4 gap).
-    from src.pipeline.services import registry
-    from src.pipeline.stores import SQLCostStore
-
-    registry.configure(cost_store=SQLCostStore(SessionLocal))
-
-    # Review-queue enrichment: read-side join over run_steps/config so the
-    # review page can surface retries, rule text, confidence+threshold and
-    # escalation reason without recomputing anything.
-    from src.pipeline.approval_api import set_queue_context_provider
-    from src.pipeline.queue_enrichment import make_db_context_provider
-
-    set_queue_context_provider(make_db_context_provider(SessionLocal))
-
-    set_incremental_approval_service(service)
+    init_services(SessionLocal, engine=engine, check_db=False)
     logger.info("Application started. Approval service configured.")
     yield
-    set_approval_service(None)
-    set_incremental_approval_service(None)
-    set_claim_persister(None)
-    set_history_store(None)
-    set_queue_context_provider(None)
-    registry.cost_store = None
+    cleanup_services()
     logger.info("Application shutdown.")
+
 
 
 # ─── App creation ─────────────────────────────────────────────────────────────
@@ -160,9 +113,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+cors_origins_raw = os.environ.get(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000",
+)
+allowed_origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -182,8 +141,18 @@ app.include_router(incremental_router)
 
 
 @app.get("/health")
-async def health() -> dict:
-    return {"status": "ok"}
+async def health():
+    """Health check endpoint — pings the database with SELECT 1."""
+    try:
+        def _check_db():
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+
+        await run_in_threadpool(_check_db)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.warning("Health check database ping failed: %s", e)
+        return JSONResponse(status_code=503, content={"status": "degraded"})
 
 
 # ─── Run management ──────────────────────────────────────────────────────────
@@ -450,6 +419,45 @@ async def _execute_pipeline_background(
             "status": "failed",
             "error": str(e),
         })
+
+
+def _load_seed_demo_module():
+    # Import the seeding core. scripts/ is a top-level dir (not under src/),
+    # so load it by file path to avoid depending on it being an installed
+    # package or on the current working directory.
+    import importlib.util
+    import sys
+
+    seed_path = Path(__file__).resolve().parent.parent / "scripts" / "seed_demo.py"
+    if not seed_path.exists():
+        raise HTTPException(
+            status_code=501,
+            detail="Demo seeding is unavailable: scripts/seed_demo.py not found in this deployment.",
+        )
+    spec = importlib.util.spec_from_file_location("seed_demo", seed_path)
+    seed_module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = seed_module
+    spec.loader.exec_module(seed_module)
+    return seed_module
+
+
+@app.post("/demo/seed")
+async def seed_demo_endpoint() -> dict:
+    """Seed the fixed demo pile (the same work `scripts/seed_demo.py` does).
+
+    Calls the seeding logic in-process — no shell/subprocess execution and no
+    caller-supplied input. Idempotent: if the demo pile is already present the
+    call is a no-op and reports status "skipped". The blocking DB work runs in
+    a threadpool so it does not stall the event loop.
+    """
+    seed_module = _load_seed_demo_module()
+
+    try:
+        result = await run_in_threadpool(seed_module.seed_demo)
+    except Exception as e:
+        logger.exception("Demo seed failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Demo seed failed: {e}")
+    return result
 
 
 @app.get("/runs")
@@ -938,14 +946,18 @@ async def get_run_report(run_id: str) -> dict:
 
         # Compute overall verdict
         non_compliant_count = sum(1 for v in verdicts if v.get("verdict") == "non_compliant")
+        review_required_count = sum(1 for v in verdicts if v.get("verdict") == "review_required")
         indeterminate_count = sum(1 for v in verdicts if v.get("verdict") == "indeterminate")
         compliant_count = sum(1 for v in verdicts if v.get("verdict") == "compliant")
         total_claims = len(claims)
 
-        if non_compliant_count > 0:
+        finding_fails = sum(1 for f in findings if f.get("verdict") in ("fail", "non_compliant"))
+        finding_reviews = sum(1 for f in findings if f.get("verdict") == "review_required")
+
+        if non_compliant_count > 0 or finding_fails > 0:
             overall_verdict = "NON-COMPLIANT"
             risk_level = "HIGH"
-        elif indeterminate_count > total_claims * 0.3:
+        elif review_required_count > 0 or finding_reviews > 0 or indeterminate_count > total_claims * 0.3:
             overall_verdict = "REQUIRES REVIEW"
             risk_level = "MEDIUM"
         elif indeterminate_count > 0:
@@ -958,7 +970,7 @@ async def get_run_report(run_id: str) -> dict:
         # Risk score (0-100)
         if total_claims > 0:
             risk_score = int(
-                (non_compliant_count * 100 + indeterminate_count * 40) / total_claims
+                (non_compliant_count * 100 + (review_required_count + indeterminate_count) * 40) / total_claims
             )
         else:
             risk_score = 0
@@ -1016,6 +1028,7 @@ async def get_run_report(run_id: str) -> dict:
                 "total": total_claims,
                 "compliant": compliant_count,
                 "non_compliant": non_compliant_count,
+                "review_required": review_required_count,
                 "indeterminate": indeterminate_count,
                 "details": claim_details,
             },
@@ -1058,9 +1071,12 @@ def _generate_summary(verdict: str, non_compliant: int, indeterminate: int, comp
 
     if non_compliant > 0:
         parts.append(f"{non_compliant} claim(s) were found NON-COMPLIANT, requiring immediate attention.")
+    review_findings = [f for f in findings if f.get("verdict") == "review_required"]
+    if review_findings:
+        parts.append(f"{len(review_findings)} item(s) require compliance review due to missing disclosures or unverifiable facts.")
     if indeterminate > 0:
         parts.append(f"{indeterminate} claim(s) could not be definitively assessed and require manual review.")
-    if compliant > 0 and non_compliant == 0:
+    if compliant > 0 and non_compliant == 0 and not review_findings:
         parts.append(f"All {compliant} evaluated claims are within regulatory bounds.")
 
     if findings:

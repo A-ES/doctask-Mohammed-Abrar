@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.pipeline.approval import (
@@ -207,10 +207,36 @@ def get_item(
     return _item_to_response(item)
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _trigger_resume_if_paused(run_id: str, background_tasks: Optional[BackgroundTasks] = None) -> None:
+    """Automatically resume a paused run in a background task."""
+    try:
+        import uuid
+        from sqlalchemy import select
+        from src.database import SessionLocal
+        from src.models.runs import Run
+
+        with SessionLocal() as session:
+            run = session.execute(
+                select(Run).where(Run.id == uuid.UUID(run_id))
+            ).scalar_one_or_none()
+            logger.info("_trigger_resume_if_paused: run_id=%s, run=%s, status=%s", run_id, run, getattr(run, "status", None))
+            if run and run.status == "paused":
+                from src.pipeline.demo_executor import dispatch_resume_task
+                dispatch_resume_task(run_id, background_tasks)
+    except Exception as e:
+        logger.exception("Error in _trigger_resume_if_paused for run %s: %s", run_id, e)
+
+
 @router.post("/items/{item_id}/decide", response_model=DecisionResponse)
 def decide_item(
     item_id: str,
     request: DecisionRequest,
+    background_tasks: BackgroundTasks = None,
     service: ApprovalService = Depends(get_approval_service),
 ) -> DecisionResponse:
     """Approve or reject a single queue item.
@@ -221,9 +247,14 @@ def decide_item(
     - Approving/rejecting one item has zero effect on other items in the queue.
     - The operation is atomic: either the decision is fully recorded or it fails.
     - Items can only be decided once (pending → approved/rejected is one-way).
+    - When the last pending item for a run is decided, automatically resumes
+      a paused run from human_review's successor (finalize) in background.
 
     Returns 200 on success, 404 if item not found, 409 if already decided.
     """
+    item = service.get_item(item_id)
+    run_id = item.run_id if item else None
+
     decision = DecisionValue(request.decision)
     result = service.decide(
         item_id=item_id,
@@ -237,6 +268,12 @@ def decide_item(
             raise HTTPException(status_code=404, detail=result.error)
         else:
             raise HTTPException(status_code=409, detail=result.error)
+
+    if run_id:
+        pending = service.get_pending(run_id)
+        logger.info("decide_item: run_id=%s, remaining pending count=%d", run_id, len(pending))
+        if len(pending) == 0:
+            _trigger_resume_if_paused(run_id, background_tasks)
 
     return DecisionResponse(
         item_id=result.item_id,

@@ -42,6 +42,7 @@ class SectionClaim:
     confidence: float
     source_document_id: str
     citation_status: str = "grounded"  # "grounded" | "unverifiable"
+    decision: Optional[str] = None
 
 
 @dataclass
@@ -90,6 +91,7 @@ class Section:
                 "confidence": c.confidence,
                 "source_document_id": c.source_document_id,
                 "citation_status": c.citation_status,
+                **({"decision": c.decision} if getattr(c, "decision", None) is not None else {}),
             }
             for c in sorted_claims
         ]

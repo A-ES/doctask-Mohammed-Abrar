@@ -10,26 +10,15 @@ Requirements: 6.3, 6.8
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
+from src.pipeline.graph import NODES, PATH_MAPS
 from src.pipeline.routing import make_routing_fn
 from src.pipeline.serialization import deserialize_state
 from src.pipeline.state import PipelineState
 
 
-# --- Node ordering for determining "next" node ---
+# --- Node ordering for determining "next" node (derived from canonical graph NODES) ---
 
-NODE_ORDER: list[str] = [
-    "ingest",
-    "extract_text",
-    "classify_document",
-    "chunk",
-    "embed",
-    "extract_claims",
-    "match_rules",
-    "score_confidence",
-    "route_to_queue",
-    "human_review",
-    "finalize",
-]
+NODE_ORDER: list[str] = list(NODES.keys())
 
 
 # --- Protocol for dependency injection ---
@@ -184,50 +173,5 @@ def _resolve_next_node(source_node: str, routing_decision: str) -> str:
     Returns:
         The name of the next node to execute.
     """
-    # Path maps per source node (mirrors the design doc routing tables)
-    path_maps: dict[str, dict[str, str]] = {
-        "ingest": {"next": "extract_text", "escalate": "route_to_queue"},
-        "extract_text": {
-            "next": "chunk",
-            "retry": "extract_text",
-            "escalate": "route_to_queue",
-        },
-        "chunk": {"next": "embed", "escalate": "route_to_queue"},
-        "embed": {
-            "next": "extract_claims",
-            "retry": "embed",
-            "escalate": "route_to_queue",
-        },
-        "extract_claims": {
-            "next": "match_rules",
-            "retry": "extract_claims",
-            "escalate": "route_to_queue",
-        },
-        "match_rules": {
-            "next": "score_confidence",
-            "retry": "match_rules",
-            "escalate": "route_to_queue",
-        },
-        "score_confidence": {
-            "next": "route_to_queue",
-            "retry": "score_confidence",
-            "escalate": "route_to_queue",
-        },
-        "route_to_queue": {
-            "escalate": "human_review",
-            "next": "finalize",
-            "retry": "route_to_queue",
-        },
-        "human_review": {
-            "finalize": "finalize",
-            "escalate": "route_to_queue",
-        },
-        "finalize": {
-            "end": "__end__",
-            "retry": "finalize",
-            "escalate": "__failed__",
-        },
-    }
-
-    node_map = path_maps.get(source_node, {})
+    node_map = PATH_MAPS.get(source_node, {})
     return node_map.get(routing_decision, "route_to_queue")

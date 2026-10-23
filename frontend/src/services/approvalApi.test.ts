@@ -9,6 +9,8 @@ import {
   ApiError,
 } from "./approvalApi";
 
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+
 // Mock global fetch
 const mockFetch = vi.fn();
 
@@ -42,7 +44,7 @@ describe("approvalApi", () => {
       const result = await fetchQueue("run-1");
       expect(result).toEqual(mockData);
       expect(mockFetch).toHaveBeenCalledWith(
-        "/approval/runs/run-1/queue",
+        `${BASE_URL}/approval/runs/run-1/queue`,
         undefined
       );
     });
@@ -66,7 +68,7 @@ describe("approvalApi", () => {
       const result = await fetchItem("item-1");
       expect(result).toEqual(mockItem);
       expect(mockFetch).toHaveBeenCalledWith(
-        "/approval/items/item-1",
+        `${BASE_URL}/approval/items/item-1`,
         undefined
       );
     });
@@ -100,7 +102,7 @@ describe("approvalApi", () => {
       const result = await submitDecision("item-1", request);
       expect(result).toEqual(mockResponse);
       expect(mockFetch).toHaveBeenCalledWith(
-        "/approval/items/item-1/decide",
+        `${BASE_URL}/approval/items/item-1/decide`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -134,7 +136,7 @@ describe("approvalApi", () => {
 
       const result = await fetchRuns();
       expect(result).toEqual(mockRuns);
-      expect(mockFetch).toHaveBeenCalledWith("/runs", undefined);
+      expect(mockFetch).toHaveBeenCalledWith(`${BASE_URL}/runs`, undefined);
     });
   });
 
@@ -144,7 +146,7 @@ describe("approvalApi", () => {
 
       const result = await resumeRun("run-1");
       expect(result).toEqual({ status: "running" });
-      expect(mockFetch).toHaveBeenCalledWith("/runs/run-1/resume", {
+      expect(mockFetch).toHaveBeenCalledWith(`${BASE_URL}/runs/run-1/resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
@@ -163,7 +165,7 @@ describe("approvalApi", () => {
 
       const result = await fetchRunProgress("run-1");
       expect(result).toEqual(mockProgress);
-      expect(mockFetch).toHaveBeenCalledWith("/runs/run-1/history", undefined);
+      expect(mockFetch).toHaveBeenCalledWith(`${BASE_URL}/runs/run-1/state`, undefined);
     });
   });
 

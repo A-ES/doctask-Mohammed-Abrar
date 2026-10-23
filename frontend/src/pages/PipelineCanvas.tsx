@@ -22,11 +22,42 @@ import { ReportPanel } from '@/components/pipeline/ReportPanel';
 import { usePipelineState } from '@/hooks/usePipelineState';
 import { applyDagreLayout } from '@/utils/pipelineLayout';
 import { fetchPipelineRuns, fetchRunCost, fetchRunHistory, resumeRun, deleteRun } from '@/services/pipelineApi';
-import type { RunListItem, PileListItem } from '@/services/pipelineApi';
+import type { RunListItem, PileListItem, SeedDemoResponse } from '@/services/pipelineApi';
 import { fetchPileDetail, startPipelineWithPile } from '@/services/pipelineApi';
 import { ResumeButton } from '@/components/review/ResumeButton';
 import { PilesPanel } from '@/components/pipeline/PilesPanel';
 import type { NodeStatus, EdgeDecision } from '@/types/pipeline';
+import { motion } from 'framer-motion';
+import { Link, useLocation } from 'react-router-dom';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Separator } from '@/components/ui/separator';
+import {
+  LayoutDashboard,
+  FileClock,
+  MessagesSquare,
+  ChevronsUpDown,
+  ChevronLeft,
+  UserCog,
+  Blocks,
+  Plus,
+  Search,
+  Settings,
+  UserCircle,
+  LogOut,
+  Trash2,
+  FolderOpen,
+  SlidersHorizontal,
+} from 'lucide-react';
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
@@ -104,7 +135,22 @@ const STATUS_DOT_COLOR: Record<string, string> = {
   pending: 'bg-white/40',
 };
 
-function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, onRunDelete, selectedPileId, onPileSelect, onDocumentsUploaded }: {
+const sidebarVariants = {
+  open: {
+    width: '18rem',
+  },
+  closed: {
+    width: '3.35rem',
+  },
+};
+
+const transitionProps = {
+  type: 'tween',
+  ease: 'easeOut',
+  duration: 0.2,
+} as const;
+
+function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, onRunDelete, selectedPileId, onPileSelect, onDocumentsUploaded, onDemoSeeded, pendingApprovalsCount = 0 }: {
   collapsed: boolean;
   onToggle: () => void;
   runs: RunListItem[];
@@ -114,8 +160,11 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, onRunDel
   selectedPileId: string | null;
   onPileSelect: (pile: PileListItem) => void;
   onDocumentsUploaded: () => void;
+  onDemoSeeded: (result: SeedDemoResponse) => Promise<void>;
+  pendingApprovalsCount?: number;
 }) {
-  // Local checkbox state (filter state — purely UI for now)
+  const location = useLocation();
+  const [searchQuery, setSearchQuery] = useState('');
   const [statusFilters, setStatusFilters] = useState<Record<string, boolean>>({});
   const [docTypeFilters, setDocTypeFilters] = useState<Record<string, boolean>>({});
   const [playbookFilters, setPlaybookFilters] = useState<Record<string, boolean>>({});
@@ -124,144 +173,429 @@ function Sidebar({ collapsed, onToggle, runs, activeRunId, onRunSelect, onRunDel
     setter((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const filteredRuns = useMemo(() => {
+    return runs.filter((r) => {
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = (r.pile_name ?? '').toLowerCase().includes(q);
+        const matchFile = (r.filename ?? '').toLowerCase().includes(q);
+        const matchId = r.id.toLowerCase().includes(q);
+        if (!matchName && !matchFile && !matchId) return false;
+      }
+      const hasStatusFilter = Object.values(statusFilters).some(Boolean);
+      if (hasStatusFilter) {
+        const statusKey = r.status.charAt(0).toUpperCase() + r.status.slice(1);
+        if (!statusFilters[statusKey]) return false;
+      }
+      const hasDocTypeFilter = Object.values(docTypeFilters).some(Boolean);
+      if (hasDocTypeFilter) {
+        const fileLower = (r.filename ?? '').toLowerCase();
+        const matchesDocType = Object.entries(docTypeFilters).some(([type, checked]) => {
+          if (!checked) return false;
+          if (type === 'Loan Agreement') return fileLower.includes('loan') || fileLower.includes('agreement');
+          if (type === 'Disclosure') return fileLower.includes('disclosure') || fileLower.includes('disc');
+          if (type === 'Policy Manual') return fileLower.includes('policy') || fileLower.includes('manual');
+          if (type === 'Amendment') return fileLower.includes('amendment') || fileLower.includes('statement') || fileLower.includes('repayment');
+          return fileLower.includes(type.toLowerCase());
+        });
+        if (!matchesDocType) return false;
+      }
+      const hasPlaybookFilter = Object.values(playbookFilters).some(Boolean);
+      if (hasPlaybookFilter) {
+        const pileLower = (r.pile_name ?? '').toLowerCase();
+        const fileLower = (r.filename ?? '').toLowerCase();
+        const matchesPlaybook = Object.entries(playbookFilters).some(([playbook, checked]) => {
+          if (!checked) return false;
+          if (playbook === 'Microfinance v1') return pileLower.includes('microfinance') || fileLower.includes('microfinance');
+          if (playbook === 'Consumer Lending') return pileLower.includes('consumer') || pileLower.includes('lending');
+          if (playbook === 'Regulatory Check') return pileLower.includes('regulatory') || pileLower.includes('compliance');
+          return pileLower.includes(playbook.toLowerCase());
+        });
+        if (!matchesPlaybook) return false;
+      }
+      return true;
+    });
+  }, [runs, searchQuery, statusFilters, docTypeFilters, playbookFilters]);
+
   return (
-    <div
-      className={`h-full border-r border-white/[0.06] bg-[#0f1320] transition-all duration-200 flex flex-col ${
-        collapsed ? 'w-12' : 'w-72'
-      }`}
+    <motion.aside
+      className="sidebar relative z-30 h-full shrink-0 border-r border-white/[0.08] bg-[#0c101d] flex flex-col select-none overflow-hidden"
+      initial={collapsed ? 'closed' : 'open'}
+      animate={collapsed ? 'closed' : 'open'}
+      variants={sidebarVariants}
+      transition={transitionProps}
     >
-      <button
-        onClick={onToggle}
-        className="flex items-center justify-center h-10 w-full border-b border-white/[0.06] text-white/50 hover:text-white/80 hover:bg-white/[0.03] transition-colors"
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      >
-        <svg className={`w-4 h-4 transition-transform ${collapsed ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
-
-      {collapsed ? null : (
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
-          {/* Search */}
-          <div className="relative">
-            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30 pointer-events-none" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5}>
-              <circle cx="7" cy="7" r="5" />
-              <path d="M11 11l3.5 3.5" strokeLinecap="round" />
-            </svg>
-            <input
-              type="text"
-              placeholder="Search runs..."
-              className="w-full rounded-lg border border-white/[0.08] bg-white/[0.03] pl-8 pr-3 py-2 text-[13px] text-white/80 placeholder-white/30 transition-all focus:border-indigo-500/60 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:bg-white/[0.05] hover:border-white/[0.15]"
-            />
-          </div>
-
-          {/* Piles */}
-          <PilesPanel
-            selectedPileId={selectedPileId}
-            onPileSelect={onPileSelect}
-            onDocumentsUploaded={onDocumentsUploaded}
-          />
-
-          {/* Filters */}
-          <FilterSection title="Status">
-            {['Running', 'Completed', 'Failed', 'Paused'].map((s) => (
-              <CustomCheckbox
-                key={s}
-                label={s}
-                checked={!!statusFilters[s]}
-                onChange={() => toggle(setStatusFilters, s)}
-              />
-            ))}
-          </FilterSection>
-
-          <FilterSection title="Document Type">
-            {['Loan Agreement', 'Disclosure', 'Policy Manual', 'Amendment'].map((t) => (
-              <CustomCheckbox
-                key={t}
-                label={t}
-                checked={!!docTypeFilters[t]}
-                onChange={() => toggle(setDocTypeFilters, t)}
-              />
-            ))}
-          </FilterSection>
-
-          <FilterSection title="Playbook">
-            {['Microfinance v1', 'Consumer Lending', 'Regulatory Check'].map((p) => (
-              <CustomCheckbox
-                key={p}
-                label={p}
-                checked={!!playbookFilters[p]}
-                onChange={() => toggle(setPlaybookFilters, p)}
-              />
-            ))}
-          </FilterSection>
-
-          {/* Recent Runs */}
-          <div>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/45 block mb-2.5">
-              Recent Runs
-            </span>
-            <div className="space-y-2">
-              {runs.length === 0 && (
-                <p className="text-[12px] text-white/30 italic">No runs yet</p>
+      {/* ─── Header: Org Selector & Collapse Toggle ─── */}
+      <div className="flex h-[54px] w-full shrink-0 items-center border-b border-white/[0.08] px-2.5 justify-between">
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="flex items-center gap-2 px-1.5 py-1 text-white/90 hover:bg-white/[0.06] hover:text-white"
+            >
+              <Avatar className="size-5 rounded shrink-0">
+                <AvatarImage
+                  src="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=100&auto=format&fit=crop&q=80"
+                  alt="Organization"
+                />
+                <AvatarFallback className="bg-indigo-600 text-[10px] text-white">O</AvatarFallback>
+              </Avatar>
+              {!collapsed && (
+                <div className="flex items-center gap-1.5 text-left min-w-0">
+                  <span className="text-xs font-semibold tracking-tight text-white/90 truncate max-w-[120px]">
+                    Acme Financial
+                  </span>
+                  <ChevronsUpDown className="h-3.5 w-3.5 text-white/40 shrink-0" />
+                </div>
               )}
-              {runs.map((run) => {
-                const isActive = run.id === activeRunId;
-                const label = run.pile_name
-                  ? `${run.id.slice(0, 8)} — ${run.pile_name}`
-                  : run.filename
-                    ? `${run.id.slice(0, 8)} — ${run.filename}`
-                    : `Run ${run.id.slice(0, 8)}`;
-                return (
-                  <div
-                    key={run.id}
-                    onClick={() => onRunSelect(run)}
-                    className={`
-                      group rounded-lg border px-3 py-2.5 cursor-pointer transition-all duration-150
-                      ${isActive
-                        ? 'border-indigo-500/40 bg-indigo-500/[0.08] border-l-[3px] border-l-indigo-500'
-                        : 'border-white/[0.06] bg-white/[0.02] hover:border-white/[0.14] hover:bg-white/[0.04]'
-                      }
-                    `}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT_COLOR[run.status] ?? 'bg-white/30'} ${run.status === 'running' ? 'animate-pulse' : ''}`} />
-                      <div className="min-w-0 flex-1">
-                        <span className={`text-[13px] font-medium truncate block ${isActive ? 'text-white/90' : 'text-white/55 group-hover:text-white/75'}`}>
-                          {label}
-                        </span>
-                        {run.pile_name && (
-                          <span className="text-[10px] text-white/30 truncate block">
-                            Pile: {run.pile_name}
-                          </span>
-                        )}
-                      </div>
-                      {(run.needs_recheck_count ?? 0) > 0 && (
-                        <span
-                          className="flex-shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30"
-                          title="Has approvals made with zero/null citations — flagged for re-review"
-                        >
-                          {run.needs_recheck_count} recheck
-                        </span>
-                      )}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onRunDelete(run.id); }}
-                        className="opacity-0 group-hover:opacity-100 p-1 rounded text-white/30 hover:text-rose-400 hover:bg-rose-500/10 transition-all"
-                        title="Delete run"
-                      >
-                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                          <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56 bg-[#131828] border-white/[0.1] text-white">
+            <DropdownMenuItem className="flex items-center gap-2 text-xs text-white/80 hover:text-white cursor-pointer">
+              <UserCog className="h-4 w-4" /> Manage members
+            </DropdownMenuItem>
+            <DropdownMenuItem className="flex items-center gap-2 text-xs text-white/80 hover:text-white cursor-pointer">
+              <Blocks className="h-4 w-4" /> Integrations
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-white/[0.08]" />
+            <DropdownMenuItem className="flex items-center gap-2 text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer">
+              <Plus className="h-4 w-4" /> Create or join organization
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <button
+          onClick={onToggle}
+          className="flex items-center justify-center h-7 w-7 rounded-md text-white/40 hover:text-white hover:bg-white/[0.06] transition-colors"
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          <ChevronLeft className={`h-4 w-4 transition-transform duration-200 ${collapsed ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+
+      {/* ─── Primary Navigation ─── */}
+      <div className="px-2 py-2 shrink-0 space-y-1 border-b border-white/[0.06]">
+        <Link
+          to="/pipeline"
+          className={`flex h-8 items-center rounded-md px-2 transition ${
+            location.pathname.includes('/pipeline') || location.pathname === '/'
+              ? 'bg-indigo-500/15 text-indigo-300 font-medium'
+              : 'text-white/60 hover:bg-white/[0.05] hover:text-white/90'
+          }`}
+          title="Pipeline Canvas"
+        >
+          <LayoutDashboard className="h-4 w-4 shrink-0 text-indigo-400" />
+          {!collapsed && <span className="ml-2.5 text-xs">Pipeline</span>}
+        </Link>
+        <Link
+          to={activeRunId ? `/review?runId=${activeRunId}` : '/review'}
+          className={`flex h-8 items-center rounded-md px-2 transition ${
+            location.pathname.includes('/review')
+              ? 'bg-indigo-500/15 text-indigo-300 font-medium'
+              : 'text-white/60 hover:bg-white/[0.05] hover:text-white/90'
+          }`}
+          title="Document Review"
+        >
+          <FileClock className="h-4 w-4 shrink-0 text-sky-400" />
+          {!collapsed && (
+            <div className="ml-2.5 flex items-center justify-between flex-1 min-w-0">
+              <span className="text-xs truncate">Document Review</span>
+              {pendingApprovalsCount > 0 && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-none bg-amber-500/20 text-amber-300 font-semibold shrink-0">
+                  {pendingApprovalsCount}
+                </Badge>
+              )}
             </div>
-          </div>
+          )}
+        </Link>
+        <div
+          className="flex h-8 items-center rounded-md px-2 text-white/60 hover:bg-white/[0.05] hover:text-white/90 transition cursor-pointer"
+          title="AI Assistant (Beta)"
+        >
+          <MessagesSquare className="h-4 w-4 shrink-0 text-purple-400" />
+          {!collapsed && (
+            <div className="ml-2.5 flex items-center justify-between flex-1">
+              <span className="text-xs">Chat</span>
+              <Badge variant="outline" className="text-[9px] px-1 py-0 border-none bg-blue-500/15 text-blue-400 font-bold">
+                BETA
+              </Badge>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      </div>
+
+      {/* ─── Scrollable Workspace (Piles, Runs, Filters) ─── */}
+      <div className="flex-1 overflow-hidden min-h-0">
+        {collapsed ? (
+          <div className="flex flex-col items-center py-4 space-y-4 text-white/40">
+            <button
+              onClick={onToggle}
+              className="p-2 rounded-md hover:bg-white/[0.06] hover:text-white transition"
+              title="Search runs"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+            <button
+              onClick={onToggle}
+              className="p-2 rounded-md hover:bg-white/[0.06] hover:text-white transition"
+              title="Piles"
+            >
+              <FolderOpen className="h-4 w-4" />
+            </button>
+            <button
+              onClick={onToggle}
+              className="p-2 rounded-md hover:bg-white/[0.06] hover:text-white transition relative"
+              title="Recent Runs"
+            >
+              <span className="w-2 h-2 rounded-full bg-indigo-400 absolute top-1.5 right-1.5 animate-pulse" />
+              <FileClock className="h-4 w-4" />
+            </button>
+            <button
+              onClick={onToggle}
+              className="p-2 rounded-md hover:bg-white/[0.06] hover:text-white transition"
+              title="Filters"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+            </button>
+          </div>
+        ) : (
+          <ScrollArea className="h-full px-3 py-3">
+            <div className="space-y-5">
+              {/* Search */}
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search runs..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full rounded-lg border border-white/[0.08] bg-white/[0.03] pl-8 pr-3 py-1.5 text-xs text-white/90 placeholder-white/30 transition-all focus:border-indigo-500/60 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 hover:border-white/[0.15]"
+                />
+              </div>
+
+              {/* Piles Section */}
+              <PilesPanel
+                selectedPileId={selectedPileId}
+                onPileSelect={onPileSelect}
+                onDocumentsUploaded={onDocumentsUploaded}
+                onDemoSeeded={onDemoSeeded}
+              />
+
+              <Separator className="bg-white/[0.06]" />
+
+              {/* Recent Runs Section */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/45">
+                    Recent Runs ({filteredRuns.length})
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {filteredRuns.length === 0 && (
+                    <div className="py-2.5 px-2 text-center rounded-md border border-white/[0.05] bg-white/[0.02]">
+                      <p className="text-[12px] text-white/40 italic">No runs match active filters</p>
+                      {(Object.values(statusFilters).some(Boolean) ||
+                        Object.values(docTypeFilters).some(Boolean) ||
+                        Object.values(playbookFilters).some(Boolean) ||
+                        searchQuery.trim().length > 0) && (
+                        <button
+                          onClick={() => {
+                            setSearchQuery('');
+                            setStatusFilters({});
+                            setDocTypeFilters({});
+                            setPlaybookFilters({});
+                          }}
+                          className="mt-1.5 text-[11px] text-indigo-400 hover:text-indigo-300 underline block mx-auto cursor-pointer"
+                        >
+                          Clear all filters
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {filteredRuns.map((run) => {
+                    const isActive = run.id === activeRunId;
+                    const label = run.pile_name
+                      ? `${run.id.slice(0, 8)} — ${run.pile_name}`
+                      : run.filename
+                        ? `${run.id.slice(0, 8)} — ${run.filename}`
+                        : `Run ${run.id.slice(0, 8)}`;
+                    return (
+                      <div
+                        key={run.id}
+                        onClick={() => onRunSelect(run)}
+                        className={`
+                          group rounded-lg border px-2.5 py-2 cursor-pointer transition-all duration-150
+                          ${isActive
+                            ? 'border-indigo-500/40 bg-indigo-500/[0.09] border-l-[3px] border-l-indigo-500'
+                            : 'border-white/[0.06] bg-white/[0.02] hover:border-white/[0.14] hover:bg-white/[0.04]'
+                          }
+                        `}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                              STATUS_DOT_COLOR[run.status] ?? 'bg-white/30'
+                            } ${run.status === 'running' ? 'animate-pulse' : ''}`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <span
+                              className={`text-xs font-medium truncate block ${
+                                isActive ? 'text-white/95' : 'text-white/60 group-hover:text-white/80'
+                              }`}
+                            >
+                              {label}
+                            </span>
+                            {run.pile_name && (
+                              <span className="text-[10px] text-white/30 truncate block">
+                                Pile: {run.pile_name}
+                              </span>
+                            )}
+                          </div>
+                          {(run.needs_recheck_count ?? 0) > 0 && (
+                            <span
+                              className="flex-shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                              title="Flagged for re-review"
+                            >
+                              {run.needs_recheck_count}
+                            </span>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRunDelete(run.id);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-1 rounded text-white/30 hover:text-rose-400 hover:bg-rose-500/10 transition-all"
+                            title="Delete run"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <Separator className="bg-white/[0.06]" />
+
+              {/* Filters Section */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/45">
+                    Filters
+                  </span>
+                  {(Object.values(statusFilters).some(Boolean) ||
+                    Object.values(docTypeFilters).some(Boolean) ||
+                    Object.values(playbookFilters).some(Boolean)) && (
+                    <button
+                      onClick={() => {
+                        setStatusFilters({});
+                        setDocTypeFilters({});
+                        setPlaybookFilters({});
+                      }}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer"
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
+                <FilterSection title="Status">
+                  {['Running', 'Completed', 'Failed', 'Paused'].map((s) => (
+                    <CustomCheckbox
+                      key={s}
+                      label={s}
+                      checked={!!statusFilters[s]}
+                      onChange={() => toggle(setStatusFilters, s)}
+                    />
+                  ))}
+                </FilterSection>
+
+                <FilterSection title="Document Type">
+                  {['Loan Agreement', 'Disclosure', 'Policy Manual', 'Amendment'].map((t) => (
+                    <CustomCheckbox
+                      key={t}
+                      label={t}
+                      checked={!!docTypeFilters[t]}
+                      onChange={() => toggle(setDocTypeFilters, t)}
+                    />
+                  ))}
+                </FilterSection>
+
+                <FilterSection title="Playbook">
+                  {['Microfinance v1', 'Consumer Lending', 'Regulatory Check'].map((p) => (
+                    <CustomCheckbox
+                      key={p}
+                      label={p}
+                      checked={!!playbookFilters[p]}
+                      onChange={() => toggle(setPlaybookFilters, p)}
+                    />
+                  ))}
+                </FilterSection>
+              </div>
+            </div>
+          </ScrollArea>
+        )}
+      </div>
+
+      {/* ─── Footer: Settings & User Account ─── */}
+      <div className="p-2 border-t border-white/[0.08] shrink-0 space-y-1">
+        <button
+          onClick={onToggle}
+          className="flex h-8 w-full items-center rounded-md px-2 text-white/60 hover:bg-white/[0.06] hover:text-white transition"
+          title="Settings"
+        >
+          <Settings className="h-4 w-4 shrink-0 text-white/50" />
+          {!collapsed && <span className="ml-2.5 text-xs">Settings</span>}
+        </button>
+
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-white/70 hover:bg-white/[0.06] hover:text-white transition"
+              title="Account"
+            >
+              <Avatar className="size-5 shrink-0 rounded-full">
+                <AvatarImage
+                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80"
+                  alt="Andrew Luo"
+                />
+                <AvatarFallback className="bg-indigo-600 text-[10px] text-white">AL</AvatarFallback>
+              </Avatar>
+              {!collapsed && (
+                <>
+                  <span className="text-xs font-medium text-left truncate flex-1">Andrew Luo</span>
+                  <ChevronsUpDown className="h-3.5 w-3.5 text-white/40 shrink-0" />
+                </>
+              )}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="top" sideOffset={6} align="start" className="w-56 bg-[#131828] border-white/[0.1] text-white">
+            <div className="flex items-center gap-2.5 p-2">
+              <Avatar className="size-7 rounded-full">
+                <AvatarImage
+                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80"
+                  alt="Andrew Luo"
+                />
+                <AvatarFallback className="bg-indigo-600 text-xs text-white">AL</AvatarFallback>
+              </Avatar>
+              <div className="flex flex-col text-left min-w-0">
+                <span className="text-xs font-semibold text-white truncate">Andrew Luo</span>
+                <span className="text-[11px] text-white/50 truncate">andrew@usehindsight.com</span>
+              </div>
+            </div>
+            <DropdownMenuSeparator className="bg-white/[0.08]" />
+            <DropdownMenuItem className="flex items-center gap-2 text-xs text-white/80 hover:text-white cursor-pointer">
+              <UserCircle className="h-4 w-4" /> Profile
+            </DropdownMenuItem>
+            <DropdownMenuItem className="flex items-center gap-2 text-xs text-rose-400 hover:text-rose-300 cursor-pointer">
+              <LogOut className="h-4 w-4" /> Sign out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </motion.aside>
   );
 }
 
@@ -722,6 +1056,38 @@ export function PipelineCanvas() {
     setSelectedPileName(pile.name);
   }, []);
 
+  const handleDemoSeeded = useCallback(async (result: SeedDemoResponse) => {
+    if (!result.pile_id) return;
+
+    const detail = await fetchPileDetail(result.pile_id);
+    setSelectedPileId(result.pile_id);
+    setSelectedPileName(detail.name);
+
+    if (detail.documents.length === 0) return;
+
+    setIsUploading(true);
+    try {
+      const startResult = await startPipelineWithPile(result.pile_id);
+      const firstDoc = detail.documents[0];
+      setActiveRunId(startResult.run_id);
+      setActiveFilename(detail.name);
+      setRuns((prev) => [{
+        id: startResult.run_id,
+        status: 'running',
+        started_at: new Date().toISOString(),
+        document_id: firstDoc.document_id,
+        filename: firstDoc.filename,
+        pile_id: result.pile_id ?? null,
+        pile_name: detail.name,
+      }, ...prev]);
+    } catch (err) {
+      console.error('Demo pipeline start failed:', err);
+      alert(`Demo seeded, but failed to start the run: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsUploading(false);
+    }
+  }, []);
+
   // Callback when documents are uploaded to a pile (refresh runs, etc.)
   const handleDocumentsUploaded = useCallback(() => {
     // No-op for now; PilesPanel handles its own refresh
@@ -852,6 +1218,7 @@ export function PipelineCanvas() {
         selectedPileId={selectedPileId}
         onPileSelect={handlePileSelect}
         onDocumentsUploaded={handleDocumentsUploaded}
+        onDemoSeeded={handleDemoSeeded}
       />
 
       <div className="flex-1 flex flex-col min-w-0">

@@ -12,6 +12,7 @@ DDL statements.
 import re
 from pathlib import Path
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from sqlalchemy import text
@@ -51,6 +52,17 @@ def _strip_transaction_wrappers(sql: str) -> str:
         r"^\s*COMMIT\s*;\s*$", "", cleaned, flags=re.MULTILINE | re.IGNORECASE
     )
     return cleaned
+
+
+@pytest.fixture(scope="module", autouse=True)
+def restore_latest_schema(db_engine):
+    """Ensure database schema is restored to latest migration version after idempotency tests."""
+    yield
+    for migration in migration_files:
+        sql = _strip_transaction_wrappers(migration.read_text(encoding="utf-8"))
+        with db_engine.connect() as conn:
+            conn.execute(text(sql))
+            conn.commit()
 
 
 @given(migration=st.sampled_from(migration_files))

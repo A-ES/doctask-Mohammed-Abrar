@@ -185,3 +185,66 @@ class TestDocumentFactsEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["document_version_id"] == seeded_document["version_id"]
+
+    def test_stale_claims_from_older_runs_are_hidden(
+        self, client, seeded_document
+    ):
+        """The view shows the LATEST run's claims only — a pile start
+        re-extracts the same document version, and stale rows from
+        previous runs (e.g. unverifiable pre-fix spans) must not clutter
+        the document view. Pinning the old run_id still serves it."""
+        old_run_id = str(uuid.uuid4())
+        session = SessionLocal()
+        try:
+            session.execute(text(
+                "INSERT INTO runs (id, status, initiator, config_snapshot, "
+                "started_at) VALUES (CAST(:id AS uuid), 'completed', "
+                "'fact-view-test', '{}'::jsonb, NOW() - INTERVAL '2 hours')"
+            ), {"id": old_run_id})
+            session.execute(text(
+                "INSERT INTO claims (id, document_version_id, run_id, "
+                "extracted_text, claim_type, confidence, field_name, "
+                "extraction_method, extracted_at) VALUES (CAST(:id AS uuid), "
+                "CAST(:vid AS uuid), CAST(:rid AS uuid), :txt, :ctype, "
+                ":conf, :field, :method, NOW() - INTERVAL '1 hour')"
+            ), {
+                "id": str(uuid.uuid4()),
+                "vid": seeded_document["version_id"],
+                "rid": old_run_id,
+                "txt": "stale unverifiable claim",
+                "ctype": "loan_agreement.stale_field",
+                "conf": 0.5,
+                "field": "stale_field",
+                "method": "llm",
+            })
+            session.commit()
+        finally:
+            session.close()
+
+        try:
+            # Default view: latest run's claims only — no stale row
+            resp = client.get(f"/documents/{seeded_document['doc_id']}/facts")
+            fields = {f["field_name"] for f in resp.json()["facts"]}
+            assert "principal_amount" in fields
+            assert "stale_field" not in fields
+
+            # Pinned to the old run: its claim is still auditable
+            resp = client.get(
+                f"/documents/{seeded_document['doc_id']}/facts",
+                params={"run_id": old_run_id},
+            )
+            fields = {f["field_name"] for f in resp.json()["facts"]}
+            assert "stale_field" in fields
+            assert "principal_amount" not in fields
+        finally:
+            session = SessionLocal()
+            try:
+                session.execute(text(
+                    "DELETE FROM claims WHERE run_id = CAST(:r AS uuid)"
+                ), {"r": old_run_id})
+                session.execute(text(
+                    "DELETE FROM runs WHERE id = CAST(:r AS uuid)"
+                ), {"r": old_run_id})
+                session.commit()
+            finally:
+                session.close()

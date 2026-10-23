@@ -440,6 +440,34 @@ export async function fetchPiles(): Promise<PileListItem[]> {
   return response.json();
 }
 
+export interface SeedDemoResponse {
+  status: 'seeded' | 'skipped';
+  reason?: string;
+  pile_id?: string;
+  run_id?: string;
+  document_count?: number;
+  conflicts?: Array<{
+    field_name: string;
+    expected_value: string;
+    contradicting_value: string;
+    repayment_filename: string;
+  }>;
+}
+
+/**
+ * Seed the fixed demo pile (runs the same logic as scripts/seed_demo.py,
+ * in-process on the backend). Idempotent — returns status "skipped" if the
+ * demo pile already exists.
+ */
+export async function seedDemo(): Promise<SeedDemoResponse> {
+  const response = await fetch(`${BASE_URL}/demo/seed`, { method: 'POST' });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Failed to seed demo' }));
+    throw new Error(error.detail || `Seed demo failed: ${response.status}`);
+  }
+  return response.json();
+}
+
 /**
  * Create a new pile.
  */

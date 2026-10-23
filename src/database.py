@@ -12,8 +12,19 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "postgresql://postgres:postgres@localhost:5432/docdb",
 )
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5)
+
+POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "20"))
+MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "10"))
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=POOL_SIZE,
+    max_overflow=MAX_OVERFLOW,
+)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 

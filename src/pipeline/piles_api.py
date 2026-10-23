@@ -23,6 +23,7 @@ from sqlalchemy import select
 from src.database import SessionLocal
 from src.models.documents import Document, DocumentVersion
 from src.models.piles import Pile, PileDocument
+from src.pipeline.upload_api import get_max_upload_size, _read_file_with_limit
 
 # Upload directory (relative to project root)
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))
@@ -208,7 +209,8 @@ async def upload_to_pile(
                     errors.append(f"{filename}: unsupported type {mime_type}")
                     continue
 
-                content = await file.read()
+                max_size = get_max_upload_size()
+                content = await _read_file_with_limit(file, max_size)
                 if len(content) == 0:
                     errors.append(f"{filename}: file is empty")
                     continue
@@ -255,6 +257,9 @@ async def upload_to_pile(
                     "size_bytes": len(content),
                 })
 
+            except HTTPException:
+                session.rollback()
+                raise
             except Exception as e:
                 errors.append(f"{file.filename or 'unknown'}: {str(e)}")
 

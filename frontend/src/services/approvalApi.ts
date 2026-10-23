@@ -185,6 +185,6 @@ export async function fetchRunProgress(
   runId: string
 ): Promise<PipelineProgress> {
   if (USE_MOCK) return mockFetchRunProgress(runId);
-  const response = await safeFetch(`${BASE_URL}/runs/${runId}/history`);
+  const response = await safeFetch(`${BASE_URL}/runs/${runId}/state`);
   return handleResponse<PipelineProgress>(response);
 }

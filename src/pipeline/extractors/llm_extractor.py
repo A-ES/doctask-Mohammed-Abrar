@@ -17,10 +17,10 @@ Citation strategy:
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Optional, Protocol
 
 from src.pipeline.extractors.base import ExtractedFact, SourceSpan
+from src.pipeline.span_resolution import resolve_span
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +101,9 @@ FIELD_SCHEMAS: dict[str, list[dict[str, str]]] = {
 def locate_span(quoted_span: str, source_text: str) -> Optional[SourceSpan]:
     """Locate a quoted span in the source text to compute character offsets.
 
-    Strategy:
-    1. Exact string match (fastest, most reliable).
-    2. Normalized match (collapse whitespace, case-insensitive).
-    3. If both fail, return None (citation unverifiable).
+    Delegates to the shared resolver, which tries exact match, normalized
+    match, and significant-token anchor matching (the LLM may paraphrase
+    the quoted span, e.g. "X is Y" for source "X: Y").
 
     Args:
         quoted_span: The verbatim text the LLM claims to have found.
@@ -113,66 +112,10 @@ def locate_span(quoted_span: str, source_text: str) -> Optional[SourceSpan]:
     Returns:
         SourceSpan with computed offsets, or None if unverifiable.
     """
-    if not quoted_span or not source_text:
+    span = resolve_span(quoted_span, source_text)
+    if span is None:
         return None
-
-    # Strategy 1: exact match
-    idx = source_text.find(quoted_span)
-    if idx != -1:
-        return SourceSpan(start_offset=idx, end_offset=idx + len(quoted_span))
-
-    # Strategy 2: normalized match (collapse whitespace, case-insensitive)
-    normalized_quote = _normalize_for_matching(quoted_span)
-    if len(normalized_quote) < 3:
-        # Too short for reliable fuzzy matching
-        return None
-
-    # Sliding window search over normalized source
-    normalized_source = _normalize_for_matching(source_text)
-    norm_idx = normalized_source.find(normalized_quote)
-    if norm_idx != -1:
-        # Map normalized position back to original text position
-        original_start = _map_normalized_pos_to_original(source_text, norm_idx)
-        original_end = _map_normalized_pos_to_original(
-            source_text, norm_idx + len(normalized_quote)
-        )
-        if original_start < original_end:
-            return SourceSpan(start_offset=original_start, end_offset=original_end)
-
-    # Strategy 3: unverifiable
-    return None
-
-
-def _normalize_for_matching(text: str) -> str:
-    """Collapse whitespace and lowercase for fuzzy span matching."""
-    return re.sub(r"\s+", " ", text.lower().strip())
-
-
-def _map_normalized_pos_to_original(original: str, normalized_pos: int) -> int:
-    """Map a character position in normalized text back to the original text.
-
-    Walks through the original text, counting non-collapsed characters
-    until we reach the target normalized position.
-    """
-    norm_count = 0
-    in_whitespace = False
-    i = 0
-
-    # Skip leading whitespace in original (normalized strips leading)
-    while i < len(original) and original[i] in " \t\n\r":
-        i += 1
-
-    while i < len(original) and norm_count < normalized_pos:
-        if original[i] in " \t\n\r":
-            if not in_whitespace:
-                norm_count += 1  # collapsed whitespace counts as 1 char
-                in_whitespace = True
-        else:
-            norm_count += 1
-            in_whitespace = False
-        i += 1
-
-    return i
+    return SourceSpan(start_offset=span[0], end_offset=span[1])
 
 
 # ---------------------------------------------------------------------------

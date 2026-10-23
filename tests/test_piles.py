@@ -58,13 +58,19 @@ def _cleanup_pile(pile_id: str) -> None:
     try:
         pid = uuid.UUID(pile_id)
 
-        # Delete runs linked to this pile
+        # Delete runs linked to this pile (steps first — RESTRICT FK)
         from sqlalchemy import delete
 
         run_id_rows = session.execute(
             select(Run.id).where(Run.pile_id == pid)
         ).fetchall()
         _delete_run_dependents(session, [str(r[0]) for r in run_id_rows])
+        from src.models.runs import RunStep
+        session.execute(
+            delete(RunStep).where(
+                RunStep.run_id.in_([r[0] for r in run_id_rows])
+            )
+        )
         session.execute(delete(Run).where(Run.pile_id == pid))
 
         # Get document IDs from pile_documents
@@ -201,6 +207,21 @@ class TestMultiDocUpload:
         files = [("files", ("test.txt", io.BytesIO(b"data"), "text/plain"))]
         resp = client.post(f"/piles/{fake_id}/documents", files=files)
         assert resp.status_code == 404
+
+    def test_upload_to_pile_exceeding_max_size_returns_413(self, monkeypatch):
+        """POST /piles/{id}/documents returns 413 when file exceeds MAX_UPLOAD_SIZE_BYTES."""
+        monkeypatch.setenv("MAX_UPLOAD_SIZE_BYTES", "50")
+        resp = client.post("/piles", json={"name": "Oversized Upload Pile"})
+        pile_id = resp.json()["id"]
+
+        try:
+            large_content = b"X" * 100
+            files = [("files", ("large.txt", io.BytesIO(large_content), "text/plain"))]
+            resp = client.post(f"/piles/{pile_id}/documents", files=files)
+            assert resp.status_code == 413
+            assert "exceeds maximum allowed size" in resp.json()["detail"]
+        finally:
+            _cleanup_pile(pile_id)
 
 
 class TestRunWithPile:

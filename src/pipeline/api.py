@@ -13,12 +13,12 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Optional, Protocol
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 
 from src.database import SessionLocal
-from src.models.runs import RunStep
+from src.models.runs import Run, RunStep
 from src.pipeline.cancel import request_cancel
 from src.pipeline.config import load_config
 from src.pipeline.history import HistoryStore, RunHistory, get_run_history
@@ -283,21 +283,75 @@ def create_run(
     return CreateRunResponse(run_id=run_id, status="created")
 
 
+def _get_run_status_helper(run_id: str, store: Any) -> Optional[str]:
+    """Retrieve run status from store or database."""
+    if hasattr(store, "get_run_status"):
+        return store.get_run_status(run_id)
+    if hasattr(store, "get_run_state"):
+        try:
+            state_info = store.get_run_state(run_id)
+            if state_info and "run_status" in state_info:
+                return state_info["run_status"]
+        except Exception:
+            pass
+
+    try:
+        with SessionLocal() as session:
+            run = session.execute(
+                select(Run).where(Run.id == uuid.UUID(run_id))
+            ).scalar_one_or_none()
+            if run:
+                return run.status
+    except Exception:
+        pass
+    return None
+
+
 @router.post("/{run_id}/resume", response_model=ResumeRunResponse)
 def resume_run_endpoint(
     run_id: str,
+    background_tasks: BackgroundTasks = None,
     store: Any = Depends(get_resume_store),
 ) -> ResumeRunResponse:
     """Resume a pipeline run from its last checkpoint.
 
-    Calls resume_run which acquires an advisory lock, marks orphaned running
-    rows as failed, restores state from last checkpoint, and determines the
-    next node to execute.
+    Dispatches a background task that continues from the next unfinished node
+    using the persisted state. Returns clear error if run is not paused/resumable,
+    and is idempotent if called twice (no double execution).
     """
+    from src.pipeline.demo_executor import dispatch_resume_task, is_run_active
+
+    run_status = _get_run_status_helper(run_id, store)
+    if run_status is not None:
+        if run_status in ("completed", "cancelled", "completed_with_persistence_gap"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot resume run {run_id}: status is '{run_status}', only 'paused' or 'failed' runs can be resumed",
+            )
+        if run_status == "running" or is_run_active(run_id):
+            # Idempotent: already executing, return existing response without dispatching duplicate task
+            try:
+                result = resume_run(store=store, run_id=run_id)
+                next_node = result.next_node
+                resumed_from = getattr(result, "resumed_from_step", None)
+            except Exception:
+                next_node = None
+                resumed_from = None
+            return ResumeRunResponse(
+                run_id=run_id,
+                status="resumed",
+                resumed_from=resumed_from,
+                next_node=next_node,
+            )
+
     try:
         result = resume_run(store=store, run_id=run_id)
     except ResumeLockError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+    # Dispatch background task to continue execution
+    if not is_run_active(run_id):
+        dispatch_resume_task(run_id, background_tasks)
 
     if isinstance(result, ResumeFromBeginning):
         return ResumeRunResponse(
@@ -516,6 +570,7 @@ class DeliverableClaimResponse(BaseModel):
     source_document_id: str
     citation_status: str
     citation: dict[str, Any] | None = None
+    decision: str | None = None
 
 
 class DeliverableSectionResponse(BaseModel):
@@ -665,6 +720,7 @@ def get_run_deliverable_endpoint(run_id: str) -> RunDeliverableResponse:
                         source_document_id=c["source_document_id"],
                         citation_status=c["citation_status"],
                         citation=c.get("citation"),
+                        decision=c.get("decision"),
                     )
                     for c in s["claims"]
                 ],

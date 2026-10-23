@@ -157,6 +157,27 @@ def get_document_facts(
 
         source_text = _load_source_text(version.storage_ref)
 
+        # Scope claims to a single run: the pinned run if given, else the
+        # latest run that extracted claims for this version. Every pile
+        # start re-extracts the pile's documents, so a version accumulates
+        # claims from multiple runs — showing all of them would mix stale
+        # extractions (e.g. pre-fix unverifiable spans) with current ones.
+        # Older runs' claims remain as durable audit rows.
+        claim_run_id: Optional[str] = run_id
+        if claim_run_id is None:
+            latest_claim_run = session.execute(
+                text(
+                    """
+                    SELECT run_id FROM claims
+                    WHERE document_version_id = CAST(:vid AS uuid)
+                    ORDER BY extracted_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"vid": version.id},
+            ).first()
+            claim_run_id = str(latest_claim_run.run_id) if latest_claim_run else None
+
         claim_rows = session.execute(
             text(
                 """
@@ -167,10 +188,11 @@ def get_document_facts(
                 FROM claims c
                 LEFT JOIN source_locations sl ON sl.claim_id = c.id
                 WHERE c.document_version_id = CAST(:vid AS uuid)
+                  AND (CAST(:rid AS uuid) IS NULL OR c.run_id = CAST(:rid AS uuid))
                 ORDER BY COALESCE(sl.start_offset, 2147483647)
                 """
             ),
-            {"vid": version.id},
+            {"vid": version.id, "rid": claim_run_id},
         ).mappings().all()
 
         def _citation(row) -> FactCitation | None:

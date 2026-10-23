@@ -259,7 +259,7 @@ class TestResumeRun:
         assert data["run_id"] == run_id
         assert data["status"] == "resumed"
         assert data["resumed_from"] == "extract_text"
-        assert data["next_node"] == "chunk"
+        assert data["next_node"] == "classify_document"
 
     def test_resume_returns_409_when_lock_held(self, client, resume_store):
         """POST /runs/{run_id}/resume returns 409 when lock is already held."""

@@ -60,6 +60,7 @@ def valid_finding_dicts(draw: st.DrawFn) -> dict[str, Any]:
             alphabet=st.characters(categories=("L", "N", "P")),
         )
     )
+    verdict = draw(st.sampled_from(["fail", "review_required"]))
     explanation = draw(
         st.text(
             min_size=1,
@@ -70,7 +71,7 @@ def valid_finding_dicts(draw: st.DrawFn) -> dict[str, Any]:
     evaluation_method = draw(st.sampled_from(["llm", "structured"]))
     return {
         "rule_id": rule_id,
-        "verdict": "fail",
+        "verdict": verdict,
         "cited_span": asdict(cited_span),
         "explanation": explanation,
         "evaluation_method": evaluation_method,
@@ -255,7 +256,7 @@ def test_empty_chunks_produce_empty_findings(
 
 
 # =============================================================================
-# Property 6: Findings Produced If and Only If Verdict Is "fail"
+# Property 6: Findings Produced If and Only If Verdict Is "fail" or "review_required"
 # =============================================================================
 
 
@@ -270,7 +271,7 @@ def evaluation_results_with_random_verdicts(
     for i in range(num_results):
         rule_id = f"RULE-{i:03d}"
         verdict = draw(
-            st.sampled_from(["pass", "fail", "not_applicable", "insufficient_evidence"])
+            st.sampled_from(["pass", "fail", "not_applicable", "insufficient_evidence", "review_required"])
         )
         start = draw(st.integers(min_value=0, max_value=500))
         end = draw(st.integers(min_value=start + 1, max_value=start + 200))
@@ -307,16 +308,16 @@ def evaluation_results_with_random_verdicts(
 
 @given(eval_results=evaluation_results_with_random_verdicts())
 @settings(max_examples=200)
-def test_findings_produced_if_and_only_if_verdict_is_fail(
+def test_findings_produced_if_and_only_if_verdict_is_fail_or_review_required(
     eval_results: list[EvaluationResult],
 ) -> None:
-    """Property 6: Findings Produced If and Only If Verdict Is "fail".
+    """Property 6: Findings Produced If and Only If Verdict Is "fail" or "review_required".
 
-    **Validates: Requirements 6.1, 6.2, 6.3, 4.3**
+    **Validates: Requirements 6.1, 6.2, 6.3, 4.3; Invariant 13**
 
     For any list of EvaluationResult instances returned by evaluators,
     the resulting findings list SHALL contain exactly those results where
-    verdict == "fail" — no more, no fewer.
+    verdict in ("fail", "review_required") — no more, no fewer.
     """
     # Build a single chunk and a set of rules matching the evaluation results
     span_text = "Sample document text for compliance checking."
@@ -354,28 +355,28 @@ def test_findings_produced_if_and_only_if_verdict_is_fail(
         match_rules_against_sources(state, llm_evaluator=mock_llm_evaluator)
     )
 
-    # Determine expected findings — exactly those with verdict == "fail"
-    expected_fail_rule_ids = [
-        r.rule_id for r in eval_results if r.verdict == "fail"
+    # Determine expected findings — exactly those with verdict in ("fail", "review_required")
+    expected_actionable_rule_ids = [
+        r.rule_id for r in eval_results if r.verdict in ("fail", "review_required")
     ]
 
     source_findings = result_state["source_findings"]
 
-    # The number of findings must equal the number of "fail" verdicts
-    assert len(source_findings) == len(expected_fail_rule_ids), (
-        f"Expected {len(expected_fail_rule_ids)} findings (fail verdicts), "
+    # The number of findings must equal the number of actionable verdicts
+    assert len(source_findings) == len(expected_actionable_rule_ids), (
+        f"Expected {len(expected_actionable_rule_ids)} findings (fail/review_required verdicts), "
         f"got {len(source_findings)}"
     )
 
-    # Every finding must have verdict == "fail"
+    # Every finding must have verdict in ("fail", "review_required")
     for finding in source_findings:
-        assert finding["verdict"] == "fail", (
-            f"Finding has verdict '{finding['verdict']}', expected 'fail'"
+        assert finding["verdict"] in ("fail", "review_required"), (
+            f"Finding has verdict '{finding['verdict']}', expected 'fail' or 'review_required'"
         )
 
-    # The rule_ids in findings must match exactly the fail results
+    # The rule_ids in findings must match exactly the actionable results
     actual_rule_ids = [f["rule_id"] for f in source_findings]
-    assert sorted(actual_rule_ids) == sorted(expected_fail_rule_ids), (
+    assert sorted(actual_rule_ids) == sorted(expected_actionable_rule_ids), (
         f"Finding rule_ids {actual_rule_ids} do not match expected "
-        f"fail rule_ids {expected_fail_rule_ids}"
+        f"actionable rule_ids {expected_actionable_rule_ids}"
     )

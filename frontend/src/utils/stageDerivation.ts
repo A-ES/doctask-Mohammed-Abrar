@@ -12,10 +12,11 @@ export type StageStatus = "complete" | "in-progress" | "pending";
  */
 export function deriveStageStatus(
   stage: StageDefinition,
-  completedNodes: string[],
-  currentNode: string | null
+  completedNodes: string[] = [],
+  currentNode: string | null = null
 ): StageStatus {
-  const allComplete = stage.nodes.every((n) => completedNodes.includes(n));
+  const nodes = completedNodes || [];
+  const allComplete = stage.nodes.every((n) => nodes.includes(n));
   if (allComplete) return "complete";
 
   const hasRunning =

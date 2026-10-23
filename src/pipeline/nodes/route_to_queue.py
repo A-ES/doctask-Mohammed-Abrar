@@ -77,7 +77,7 @@ async def route_to_queue(state: PipelineState) -> PipelineState:
                 # All claims escalate when arriving from permanent error
                 should_escalate = True
             elif verdict_entry is not None:
-                if verdict_entry["verdict"] == "non_compliant":
+                if verdict_entry["verdict"] in ("non_compliant", "review_required"):
                     should_escalate = True
                 elif verdict_entry["confidence"] < threshold:
                     should_escalate = True

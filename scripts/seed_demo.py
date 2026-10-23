@@ -1,9 +1,17 @@
-"""Seed the database with a synthetic demo pile.
+"""Seed the database with a fixed 5-document demo pile.
 
-Generates a 5-document microfinance pile (2 loan agreements, 1 modification,
-2 repayment statements) with 2 embedded factual conflicts, stores the
-document bytes under uploads/, inserts document rows, creates a pipeline
-run, and links everything to a pile.
+Loads 5 fixed microfinance documents from samples/demo_pile/ (2 loan
+agreements from different lenders, 1 modification, 1 repayment statement,
+and 1 collections field-visit note), stores the document bytes under
+uploads/, inserts document rows, creates a pipeline run, and links
+everything to a pile.
+
+The pile carries deliberate compliance issues and cross-document
+contradictions so the pipeline has real findings to surface, plus one
+document (the collections note) that contains an embedded prompt-injection
+attempt. The injection text is stored verbatim as ordinary document
+content — it is data to be ingested and flagged, never an instruction the
+seed or pipeline honors.
 
 If a previously seeded demo pile exists but its stored files are missing
 (e.g. seeded by an older version that wrote fake `local://` storage refs),
@@ -23,6 +31,7 @@ import json
 import os
 import sys
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,31 +40,140 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import psycopg2
 
-from tests.synthetic.generator import SyntheticDocumentGenerator
-
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "postgresql://postgres:postgres@localhost:5432/docdb",
 )
 
+# Directory holding the fixed demo documents (resolved relative to the
+# project root, not the current working directory, so `make seed` works
+# regardless of where it is invoked from).
+DEMO_PILE_DIR = Path(__file__).resolve().parent.parent / "samples" / "demo_pile"
+
+
+@dataclass
+class DemoDocument:
+    """A single fixed demo document (mirrors the fields seed_demo consumes)."""
+
+    filename: str
+    document_type: str
+    content: bytes
+
+
+@dataclass
+class DemoConflict:
+    """One documented cross-document contradiction in the demo pile."""
+
+    field_name: str
+    expected_value: str
+    contradicting_value: str
+    repayment_filename: str
+
+
+@dataclass
+class DemoManifest:
+    """Describes the embedded conflicts in the fixed demo pile."""
+
+    conflicts: list[DemoConflict] = field(default_factory=list)
+
+
+@dataclass
+class DemoPile:
+    """A fixed pile of demo documents plus its conflict manifest."""
+
+    documents: list[DemoDocument] = field(default_factory=list)
+    manifest: DemoManifest = field(default_factory=DemoManifest)
+
+
+# Ordered list of the fixed demo documents: (filename, document_type).
+# document_type uses the pipeline's registered types where applicable; the
+# collections note has no registered extractor and routes to the LLM-only
+# path, which is intentional demo coverage.
+DEMO_DOCUMENTS: list[tuple[str, str]] = [
+    ("doc1_loan_agreement.txt", "loan_agreement"),
+    ("doc2_modification_agreement.txt", "modification_agreement"),
+    ("doc3_repayment_statement.txt", "repayment_statement"),
+    ("doc4_second_loan_agreement.txt", "loan_agreement"),
+    ("doc5_collections_note.txt", "collections_note"),
+]
+
+
+def load_demo_pile() -> DemoPile:
+    """Load the 5 fixed demo documents and build the conflict manifest.
+
+    Reads each file's raw bytes from samples/demo_pile/. Fails loudly if any
+    expected file is missing, so a broken checkout is caught before it
+    reaches the database.
+    """
+    documents: list[DemoDocument] = []
+    for filename, doc_type in DEMO_DOCUMENTS:
+        path = DEMO_PILE_DIR / filename
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Fixed demo document not found: {path}. "
+                "Expected 5 files under samples/demo_pile/."
+            )
+        documents.append(
+            DemoDocument(
+                filename=filename,
+                document_type=doc_type,
+                content=path.read_bytes(),
+            )
+        )
+
+    # Documented cross-document contradictions the reviewer should expect the
+    # pipeline to surface. These describe what is factually inconsistent
+    # between the fixed documents; they are printed by the seed as a preview
+    # of ground truth, not used to short-circuit any evaluation.
+    conflicts = [
+        DemoConflict(
+            field_name="interest_rate_applied_from_instalment_7",
+            expected_value="22.50% (per modification MOD-01)",
+            contradicting_value="26.00% (used to compute instalment 7 in repayment)",
+            repayment_filename="doc3_repayment_statement.txt",
+        ),
+        DemoConflict(
+            field_name="penal_charge_cap",
+            expected_value="<= 5% of overdue instalment (loan agreement Clause 6.2)",
+            contradicting_value="6.2% penal charge levied on instalment 7",
+            repayment_filename="doc3_repayment_statement.txt",
+        ),
+    ]
+
+    return DemoPile(documents=documents, manifest=DemoManifest(conflicts=conflicts))
+
 # Same convention as src/pipeline/upload_api.py — relative "uploads/" resolves
 # both on the host (project root) and inside the API container
 # (./uploads is volume-mounted at /app/uploads).
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))
 
-DEMO_SEED = 42  # Deterministic pile for reproducibility
+DEMO_SEED = 42  # Stable marker identifying demo-owned rows for idempotent re-seeding
 
 
-def main() -> None:
+def seed_demo() -> dict:
+    """Seed the fixed demo pile in-process and return a structured result.
+
+    This is the importable core used by both the CLI (`main()`) and the
+    backend `/demo/seed` endpoint. It performs no shell execution and takes
+    no caller-supplied input — it only reads the fixed files under
+    samples/demo_pile/ and writes to the configured DATABASE_URL.
+
+    Returns a dict describing the outcome:
+        {"status": "seeded", "pile_id", "run_id", "document_count", "conflicts": [...]}
+        {"status": "skipped", "reason": "already_seeded", "document_count"}
+
+    Raises:
+        Exception: on any database or file error (the caller decides how to
+        surface it). The transaction is rolled back before the raise.
+    """
     print("=== Seeding demo pile ===")
     print(f"Database: {DATABASE_URL.split('@')[-1]}")  # Print host only, not creds
 
-    # Generate deterministic synthetic pile
-    generator = SyntheticDocumentGenerator(seed=DEMO_SEED)
-    pile = generator.generate()
+    # Load the fixed 5-document demo pile from samples/demo_pile/
+    pile = load_demo_pile()
 
-    print(f"Generated {len(pile.documents)} documents with {len(pile.manifest.conflicts)} conflicts")
+    print(f"Loaded {len(pile.documents)} fixed documents with {len(pile.manifest.conflicts)} documented conflicts")
 
     conn = psycopg2.connect(DATABASE_URL)
     conn.autocommit = False
@@ -76,13 +194,37 @@ def main() -> None:
             if existing_refs:
                 # Also check if the demo pile still exists and is active
                 cur.execute(
-                    "SELECT COUNT(*) FROM piles WHERE metadata->>'demo_seed' = %s AND status = 'active'",
+                    """
+                    SELECT id
+                    FROM piles
+                    WHERE metadata->>'demo_seed' = %s AND status = 'active'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
                     (str(DEMO_SEED),),
                 )
-                active_pile = cur.fetchone()[0]
-                if active_pile > 0 and all(Path(ref).exists() for ref in existing_refs):
+                active_pile_row = cur.fetchone()
+                if active_pile_row and all(Path(ref).exists() for ref in existing_refs):
+                    active_pile_id = str(active_pile_row[0])
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM runs
+                        WHERE pile_id = %s
+                        ORDER BY started_at DESC
+                        LIMIT 1
+                        """,
+                        (active_pile_id,),
+                    )
+                    active_run_row = cur.fetchone()
                     print(f"Demo pile already seeded ({len(existing_refs)} documents found). Skipping.")
-                    return
+                    return {
+                        "status": "skipped",
+                        "reason": "already_seeded",
+                        "pile_id": active_pile_id,
+                        "run_id": str(active_run_row[0]) if active_run_row else None,
+                        "document_count": len(existing_refs),
+                    }
                 print(
                     "Demo pile missing or archived. Purging stale demo data and re-seeding."
                 )
@@ -191,12 +333,36 @@ def main() -> None:
             print(f"  - {c.field_name}: expected {c.expected_value}, "
                   f"got {c.contradicting_value} ({c.repayment_filename})")
 
-    except Exception as e:
+        return {
+            "status": "seeded",
+            "pile_id": pile_id,
+            "run_id": run_id,
+            "document_count": len(document_ids),
+            "conflicts": [
+                {
+                    "field_name": c.field_name,
+                    "expected_value": c.expected_value,
+                    "contradicting_value": c.contradicting_value,
+                    "repayment_filename": c.repayment_filename,
+                }
+                for c in pile.manifest.conflicts
+            ],
+        }
+
+    except Exception:
         conn.rollback()
-        print(f"ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise
     finally:
         conn.close()
+
+
+def main() -> None:
+    """CLI entry point: run the seed and preserve exit-code semantics."""
+    try:
+        seed_demo()
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _purge_demo_data(cur) -> None:

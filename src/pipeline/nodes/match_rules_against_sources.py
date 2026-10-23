@@ -114,7 +114,7 @@ async def match_rules_against_sources(
                     )
                 )
                 for result in results:
-                    if result.verdict == "fail":
+                    if result.verdict in ("fail", "review_required"):
                         findings.append(_result_to_finding(result))
 
             # Individual structured evaluations
@@ -123,7 +123,7 @@ async def match_rules_against_sources(
                     result = await structured_evaluator.evaluate(
                         rule, span_text, span_offset
                     )
-                    if result.verdict == "fail":
+                    if result.verdict in ("fail", "review_required"):
                         findings.append(_result_to_finding(result))
 
     except Exception as exc:
@@ -137,17 +137,17 @@ async def match_rules_against_sources(
 
 
 def _result_to_finding(result: EvaluationResult) -> Finding:
-    """Convert a failing EvaluationResult to a Finding.
+    """Convert an actionable EvaluationResult to a Finding.
 
     Args:
-        result: An EvaluationResult with verdict == "fail".
+        result: An EvaluationResult with verdict in ("fail", "review_required").
 
     Returns:
         A Finding dataclass with all provenance fields populated.
     """
     return Finding(
         rule_id=result.rule_id,
-        verdict="fail",
+        verdict=result.verdict,  # type: ignore[arg-type]
         cited_span=result.cited_span,
         explanation=result.explanation,
         evaluation_method=result.evaluation_method,

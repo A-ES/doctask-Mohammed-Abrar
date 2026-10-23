@@ -19,7 +19,10 @@
     "noUncheckedSideEffectImports": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "next/link": ["src/shims/next-link.tsx"],
+      "next/navigation": ["src/shims/next-navigation.tsx"],
+      "next/image": ["src/shims/next-image.tsx"]
     }
   },
   "include": ["src", "vitest.setup.ts"]

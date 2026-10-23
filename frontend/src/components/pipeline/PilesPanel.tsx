@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchPiles, createPile, fetchPileDetail, uploadToPile, uploadIncrementalDocument, deletePile } from '@/services/pipelineApi';
-import type { PileListItem, PileDetail, IncrementalUpdateResponse, PileDocumentItem } from '@/services/pipelineApi';
+import { fetchPiles, createPile, fetchPileDetail, uploadToPile, uploadIncrementalDocument, deletePile, seedDemo } from '@/services/pipelineApi';
+import type { PileListItem, PileDetail, IncrementalUpdateResponse, PileDocumentItem, SeedDemoResponse } from '@/services/pipelineApi';
 import { FileDropZone } from './FileDropZone';
 import { DocumentDetailPanel } from './DocumentDetailPanel';
 
@@ -8,13 +8,14 @@ interface PilesPanelProps {
   selectedPileId: string | null;
   onPileSelect: (pile: PileListItem) => void;
   onDocumentsUploaded: () => void;
+  onDemoSeeded?: (result: SeedDemoResponse) => Promise<void> | void;
 }
 
 /**
  * Piles section for the sidebar — list piles, create new pile,
  * show documents in selected pile, and upload files into it.
  */
-export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }: PilesPanelProps) {
+export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded, onDemoSeeded }: PilesPanelProps) {
   const [piles, setPiles] = useState<PileListItem[]>([]);
   const [pileDetail, setPileDetail] = useState<PileDetail | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -24,6 +25,9 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
   const [isIncremental, setIsIncremental] = useState(false);
   const [incrementalResult, setIncrementalResult] = useState<IncrementalUpdateResponse | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<PileDocumentItem | null>(null);
+  const [isSeeding, setIsSeeding] = useState(false);
+  const [seedResult, setSeedResult] = useState<SeedDemoResponse | null>(null);
+  const [seedError, setSeedError] = useState<string | null>(null);
   const incrementalInputRef = useRef<HTMLInputElement>(null);
 
   // Load piles list
@@ -60,6 +64,23 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
       console.error('Failed to create pile:', err);
     }
   }, [newPileName, loadPiles, onPileSelect]);
+
+  const handleSeedDemo = useCallback(async () => {
+    setIsSeeding(true);
+    setSeedError(null);
+    setSeedResult(null);
+    try {
+      const result = await seedDemo();
+      setSeedResult(result);
+      // Refresh the pile list so the seeded demo pile appears.
+      await loadPiles();
+      await onDemoSeeded?.(result);
+    } catch (err) {
+      setSeedError(err instanceof Error ? err.message : 'Demo seed failed');
+    } finally {
+      setIsSeeding(false);
+    }
+  }, [loadPiles, onDemoSeeded]);
 
   const handleFilesSelected = useCallback(async (files: File[]) => {
     if (!selectedPileId) return;
@@ -118,6 +139,28 @@ export function PilesPanel({ selectedPileId, onPileSelect, onDocumentsUploaded }
         >
           {isCreating ? 'Cancel' : '+ New'}
         </button>
+      </div>
+
+      {/* Run demo — seeds the fixed 5-document demo pile */}
+      <div>
+        <button
+          onClick={handleSeedDemo}
+          disabled={isSeeding}
+          className="w-full rounded-md border border-indigo-500/30 bg-indigo-500/[0.08] px-2.5 py-2 text-[11px] font-medium text-indigo-300 hover:bg-indigo-500/[0.15] hover:border-indigo-500/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Seed the fixed demo pile (runs scripts/seed_demo.py logic on the backend)"
+        >
+          {isSeeding ? 'Seeding demo…' : 'Run demo'}
+        </button>
+        {seedResult && (
+          <p className="mt-1 text-[10px] text-white/45">
+            {seedResult.status === 'seeded'
+              ? `Demo seeded — ${seedResult.document_count} documents, ${seedResult.conflicts?.length ?? 0} conflicts.`
+              : 'Demo already present — nothing to seed.'}
+          </p>
+        )}
+        {seedError && (
+          <p className="mt-1 text-[10px] text-rose-400">{seedError}</p>
+        )}
       </div>
 
       {/* Create pile inline form */}

@@ -381,3 +381,110 @@ class TestResumability:
         # Only node_c should execute
         assert tracker_resume.count("node_c") == 1
         assert final_state["completed_nodes"] == ["node_a", "node_b", "node_c"]
+
+    def test_resume_from_extract_text_transitions_to_classify_document(self):
+        """Transition 1: Resuming from extract_text routes to classify_document."""
+        from src.pipeline.resume import ResumeResult, resume_run
+
+        run_id = str(uuid.uuid4())
+        store = InMemoryCheckpointStore()
+        state = self._make_initial_state(run_id)
+        state_extract = PipelineState(
+            **{
+                **state,
+                "current_node": "extract_text",
+                "node_status": "completed",
+                "completed_nodes": ["ingest", "extract_text"],
+            }
+        )
+        store.create_step(run_id, "extract_text", 2)
+        store.write_checkpoint(
+            run_id=run_id,
+            step_name="extract_text",
+            step_order=2,
+            output_state=serialize_state(state_extract),
+            status="completed",
+            ended_at=datetime.now(timezone.utc),
+        )
+
+        result = resume_run(store, run_id)
+        assert isinstance(result, ResumeResult)
+        assert result.resumed_from_step == "extract_text"
+        assert result.next_node == "classify_document"
+
+    def test_resume_from_match_rules_transitions_to_match_rules_against_sources(self):
+        """Transition 2: Resuming from match_rules routes to match_rules_against_sources."""
+        from src.pipeline.resume import ResumeResult, resume_run
+
+        run_id = str(uuid.uuid4())
+        store = InMemoryCheckpointStore()
+        state = self._make_initial_state(run_id)
+        state_rules = PipelineState(
+            **{
+                **state,
+                "current_node": "match_rules",
+                "node_status": "completed",
+                "completed_nodes": [
+                    "ingest",
+                    "extract_text",
+                    "classify_document",
+                    "chunk",
+                    "embed",
+                    "extract_claims",
+                    "match_rules",
+                ],
+            }
+        )
+        store.create_step(run_id, "match_rules", 7)
+        store.write_checkpoint(
+            run_id=run_id,
+            step_name="match_rules",
+            step_order=7,
+            output_state=serialize_state(state_rules),
+            status="completed",
+            ended_at=datetime.now(timezone.utc),
+        )
+
+        result = resume_run(store, run_id)
+        assert isinstance(result, ResumeResult)
+        assert result.resumed_from_step == "match_rules"
+        assert result.next_node == "match_rules_against_sources"
+
+    def test_resume_from_match_rules_against_sources_transitions_to_merge_findings(self):
+        """Transition 3: Resuming from match_rules_against_sources routes to merge_findings."""
+        from src.pipeline.resume import ResumeResult, resume_run
+
+        run_id = str(uuid.uuid4())
+        store = InMemoryCheckpointStore()
+        state = self._make_initial_state(run_id)
+        state_sources = PipelineState(
+            **{
+                **state,
+                "current_node": "match_rules_against_sources",
+                "node_status": "completed",
+                "completed_nodes": [
+                    "ingest",
+                    "extract_text",
+                    "classify_document",
+                    "chunk",
+                    "embed",
+                    "extract_claims",
+                    "match_rules",
+                    "match_rules_against_sources",
+                ],
+            }
+        )
+        store.create_step(run_id, "match_rules_against_sources", 8)
+        store.write_checkpoint(
+            run_id=run_id,
+            step_name="match_rules_against_sources",
+            step_order=8,
+            output_state=serialize_state(state_sources),
+            status="completed",
+            ended_at=datetime.now(timezone.utc),
+        )
+
+        result = resume_run(store, run_id)
+        assert isinstance(result, ResumeResult)
+        assert result.resumed_from_step == "match_rules_against_sources"
+        assert result.next_node == "merge_findings"

@@ -191,6 +191,8 @@ def create_run(
     document_id: str,
     document_version_id: str,
     config_overrides: dict | None = None,
+    pile_id: str | None = None,
+    pile_document_ids: list[str] | None = None,
 ) -> CreateRunResult:
     """Create a new pipeline run.
 
@@ -220,11 +222,17 @@ def create_run(
         config=config,
     )
 
+    config_snapshot = dict(config)
+    if pile_id:
+        config_snapshot["pile_id"] = str(pile_id)
+    if pile_document_ids:
+        config_snapshot["pile_document_ids"] = list(pile_document_ids)
+
     registry.run_store.create_run(
         run_id=run_id,
         document_id=document_id,
         document_version_id=document_version_id,
-        config_snapshot=dict(config),
+        config_snapshot=config_snapshot,
     )
 
     return CreateRunResult(run_id=run_id, status="created")

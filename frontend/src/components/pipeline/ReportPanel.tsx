@@ -429,11 +429,13 @@ function ClaimRow({ claim, pendingItems }: {
     compliant: 'bg-emerald-500/20 text-emerald-300',
     non_compliant: 'bg-rose-500/20 text-rose-300',
     indeterminate: 'bg-amber-500/20 text-amber-300',
+    review_required: 'bg-amber-500/20 text-amber-300',
   };
 
   const verdictIcon: Record<string, string> = {
     compliant: '\u2713',
     non_compliant: '\u2717',
+    review_required: '!',
   };
 
   return (

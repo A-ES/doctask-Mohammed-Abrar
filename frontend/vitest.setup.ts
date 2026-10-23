@@ -1,5 +1,8 @@
 import '@testing-library/jest-dom'
 
+// Stub VITE_API_BASE_URL so tests are independent of local environment (.env.local)
+import.meta.env.VITE_API_BASE_URL = '';
+
 // Polyfill DOM methods missing from jsdom that Radix UI components require
 if (typeof Element !== 'undefined') {
   Element.prototype.hasPointerCapture = Element.prototype.hasPointerCapture || (() => false);

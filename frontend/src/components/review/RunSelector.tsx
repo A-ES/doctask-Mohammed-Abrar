@@ -7,11 +7,13 @@ interface RunSelectorProps {
   onSelectRun: (runId: string) => void;
 }
 
-const STATUS_DOT_COLORS: Record<RunSummary["status"], string> = {
+const STATUS_DOT_COLORS: Record<string, string> = {
   running: "bg-blue-400",
   completed: "bg-emerald-400",
   failed: "bg-rose-400",
   paused: "bg-amber-400",
+  pending: "bg-white/40",
+  cancelled: "bg-zinc-400",
 };
 
 function formatRunId(id: string): string {
@@ -66,7 +68,7 @@ export function RunSelector({ runs, selectedRunId, onSelectRun }: RunSelectorPro
                 className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-white/70 outline-none transition-colors data-[highlighted]:bg-white/[0.06] data-[highlighted]:text-white"
               >
                 <span
-                  className={`h-2 w-2 rounded-full ${STATUS_DOT_COLORS[run.status]}`}
+                  className={`h-2 w-2 rounded-full ${STATUS_DOT_COLORS[run.status] ?? "bg-white/40"}`}
                   aria-hidden="true"
                 />
                 <Select.ItemText>

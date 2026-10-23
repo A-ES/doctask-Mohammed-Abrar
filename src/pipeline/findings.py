@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 # Type aliases for evaluation outcomes and methods
-FindingVerdict = Literal["pass", "fail", "not_applicable", "insufficient_evidence"]
+FindingVerdict = Literal[
+    "pass", "fail", "not_applicable", "insufficient_evidence", "review_required"
+]
 EvaluationMethod = Literal["llm", "structured"]
 
 
@@ -51,21 +53,21 @@ class EvaluationResult:
 
 @dataclass
 class Finding:
-    """A confirmed rule violation with full provenance.
+    """A confirmed rule violation or review requirement with full provenance.
 
-    Only produced when verdict == "fail". Findings are violations only —
-    no padding, no forced findings.
+    Produced when verdict is "fail" or "review_required". Findings represent
+    actionable compliance items — no padding, no forced findings.
 
     Attributes:
-        rule_id: The unique identifier of the violated rule.
-        verdict: Always "fail" — findings represent violations only.
-        cited_span: The exact source span that triggered the violation.
-        explanation: Reasoning for the violation determination.
+        rule_id: The unique identifier of the rule.
+        verdict: "fail" for confirmed violations or "review_required" for missing/unverifiable mandatory terms.
+        cited_span: The exact source span that triggered the finding.
+        explanation: Reasoning for the determination.
         evaluation_method: Whether the rule was evaluated by LLM or structured logic.
     """
 
     rule_id: str
-    verdict: Literal["fail"]
+    verdict: Literal["fail", "review_required"]
     cited_span: CitedSpan
     explanation: str
     evaluation_method: EvaluationMethod

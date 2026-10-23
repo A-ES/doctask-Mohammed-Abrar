@@ -116,8 +116,18 @@ class TestResumeFromCheckpoint:
         assert result.resumed_from_step == "ingest"
 
     def test_resume_from_extract_text_checkpoint(self):
-        """After extract_text completes, next node should be chunk."""
+        """After extract_text completes, next node should be classify_document."""
         checkpoint = _make_checkpoint_dict("extract_text", step_order=2)
+        store = InMemoryResumeStore(checkpoint=checkpoint)
+
+        result = resume_run(store, "run-001")
+
+        assert isinstance(result, ResumeResult)
+        assert result.next_node == "classify_document"
+
+    def test_resume_from_classify_document_checkpoint(self):
+        """After classify_document completes, next node should be chunk."""
+        checkpoint = _make_checkpoint_dict("classify_document", step_order=3)
         store = InMemoryResumeStore(checkpoint=checkpoint)
 
         result = resume_run(store, "run-001")
@@ -203,8 +213,8 @@ class TestLastCheckpointIdentification:
 
         assert isinstance(result, ResumeResult)
         assert result.resumed_from_step == "extract_text"
-        # Skipped with valid reason → "next" → chunk
-        assert result.next_node == "chunk"
+        # Skipped with valid reason → "next" → classify_document
+        assert result.next_node == "classify_document"
 
 
 # --- Tests for orphaned running rows ---
@@ -364,9 +374,29 @@ class TestNextNodeRouting:
         assert isinstance(result, ResumeResult)
         assert result.next_node == "finalize"
 
-    def test_match_rules_completed_routes_to_score_confidence(self):
-        """After match_rules completes, next node is score_confidence."""
-        checkpoint = _make_checkpoint_dict("match_rules", step_order=6)
+    def test_match_rules_completed_routes_to_match_rules_against_sources(self):
+        """After match_rules completes, next node is match_rules_against_sources."""
+        checkpoint = _make_checkpoint_dict("match_rules", step_order=7)
+        store = InMemoryResumeStore(checkpoint=checkpoint)
+
+        result = resume_run(store, "run-001")
+
+        assert isinstance(result, ResumeResult)
+        assert result.next_node == "match_rules_against_sources"
+
+    def test_match_rules_against_sources_completed_routes_to_merge_findings(self):
+        """After match_rules_against_sources completes, next node is merge_findings."""
+        checkpoint = _make_checkpoint_dict("match_rules_against_sources", step_order=8)
+        store = InMemoryResumeStore(checkpoint=checkpoint)
+
+        result = resume_run(store, "run-001")
+
+        assert isinstance(result, ResumeResult)
+        assert result.next_node == "merge_findings"
+
+    def test_merge_findings_completed_routes_to_score_confidence(self):
+        """After merge_findings completes, next node is score_confidence."""
+        checkpoint = _make_checkpoint_dict("merge_findings", step_order=9)
         store = InMemoryResumeStore(checkpoint=checkpoint)
 
         result = resume_run(store, "run-001")
@@ -376,7 +406,7 @@ class TestNextNodeRouting:
 
     def test_extract_claims_completed_routes_to_match_rules(self):
         """After extract_claims completes, next node is match_rules."""
-        checkpoint = _make_checkpoint_dict("extract_claims", step_order=5)
+        checkpoint = _make_checkpoint_dict("extract_claims", step_order=6)
         store = InMemoryResumeStore(checkpoint=checkpoint)
 
         result = resume_run(store, "run-001")
@@ -389,7 +419,7 @@ class TestNextNodeRouting:
         state = _make_checkpoint_state("finalize")
         checkpoint = {
             "step_name": "finalize",
-            "step_order": 10,
+            "step_order": 13,
             "output_state": serialize_state(state),
             "status": "completed",
         }
@@ -399,3 +429,29 @@ class TestNextNodeRouting:
 
         assert isinstance(result, ResumeResult)
         assert result.next_node == "__end__"
+
+
+class TestNodeOrderCanonical:
+    """Verifies that resume.NODE_ORDER is derived from and matches the pipeline executor."""
+
+    def test_node_order_matches_graph_and_has_all_13_nodes(self):
+        from src.pipeline.graph import NODES
+        from src.pipeline.resume import NODE_ORDER
+
+        assert NODE_ORDER == list(NODES.keys())
+        assert len(NODE_ORDER) == 13
+        assert NODE_ORDER == [
+            "ingest",
+            "extract_text",
+            "classify_document",
+            "chunk",
+            "embed",
+            "extract_claims",
+            "match_rules",
+            "match_rules_against_sources",
+            "merge_findings",
+            "score_confidence",
+            "route_to_queue",
+            "human_review",
+            "finalize",
+        ]

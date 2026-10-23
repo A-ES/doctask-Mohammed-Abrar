@@ -28,6 +28,14 @@ class SQLRunStore:
         self, run_id: str, document_id: str, document_version_id: str, config_snapshot: dict
     ) -> None:
         with self._session_factory() as session:
+            pile_id_val = config_snapshot.get("pile_id")
+            pile_uuid = None
+            if pile_id_val:
+                pile_uuid = (
+                    uuid.UUID(str(pile_id_val))
+                    if not isinstance(pile_id_val, uuid.UUID)
+                    else pile_id_val
+                )
             run = Run(
                 id=uuid.UUID(run_id),
                 status="pending",
@@ -38,6 +46,7 @@ class SQLRunStore:
                 },
                 initiator="api",
                 version=1,
+                pile_id=pile_uuid,
             )
             session.add(run)
             session.commit()

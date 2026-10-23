@@ -43,6 +43,7 @@ def valid_findings(draw: st.DrawFn) -> Finding:
     rule_id = draw(st.text(min_size=1, max_size=100, alphabet=st.characters(
         categories=("L", "N", "P", "S"),
     )))
+    verdict = draw(st.sampled_from(["fail", "review_required"]))
     cited_span = draw(valid_cited_spans())
     explanation = draw(st.text(min_size=1, max_size=500, alphabet=st.characters(
         categories=("L", "N", "P", "Z", "S"),
@@ -51,7 +52,7 @@ def valid_findings(draw: st.DrawFn) -> Finding:
 
     return Finding(
         rule_id=rule_id,
-        verdict="fail",
+        verdict=verdict,
         cited_span=cited_span,
         explanation=explanation,
         evaluation_method=evaluation_method,
@@ -68,9 +69,9 @@ def test_finding_structural_completeness(finding: Finding) -> None:
 
     **Validates: Requirements 6.4, 6.5, 3.4**
 
-    Every Finding has non-empty rule_id, verdict=="fail", valid cited_span
-    (start < end, non-empty text), non-empty explanation, and valid
-    evaluation_method.
+    Every Finding has non-empty rule_id, verdict in ("fail", "review_required"),
+    valid cited_span (start < end, non-empty text), non-empty explanation, and
+    valid evaluation_method.
     """
     # rule_id is non-empty string
     assert isinstance(finding.rule_id, str), (
@@ -78,9 +79,9 @@ def test_finding_structural_completeness(finding: Finding) -> None:
     )
     assert len(finding.rule_id) > 0, "rule_id must be non-empty"
 
-    # verdict is always "fail"
-    assert finding.verdict == "fail", (
-        f"verdict must be 'fail', got '{finding.verdict}'"
+    # verdict is "fail" or "review_required"
+    assert finding.verdict in ("fail", "review_required"), (
+        f"verdict must be 'fail' or 'review_required', got '{finding.verdict}'"
     )
 
     # cited_span.start_offset < cited_span.end_offset

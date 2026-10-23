@@ -70,7 +70,7 @@ describe("RunSelector", () => {
     // Radix Select renders options in a portal attached to document.body
     const listbox = screen.getByRole("listbox");
     const options = within(listbox).getAllByRole("option");
-    expect(options).toHaveLength(3);
+    expect(options).toHaveLength(4);
   });
 
   it("calls onSelectRun when a run is selected", async () => {
@@ -86,7 +86,7 @@ describe("RunSelector", () => {
 
     const listbox = screen.getByRole("listbox");
     const options = within(listbox).getAllByRole("option");
-    await user.click(options[1]);
+    await user.click(options[2]);
 
     expect(onSelectRun).toHaveBeenCalledWith("run-98765432");
   });
@@ -104,17 +104,22 @@ describe("RunSelector", () => {
     const listbox = screen.getByRole("listbox");
     const options = within(listbox).getAllByRole("option");
 
+    // All pending -> indigo dot
+    const allPendingDot = options[0].querySelector("[aria-hidden='true']");
+    expect(allPendingDot).toBeInTheDocument();
+    expect(allPendingDot!.className).toContain("bg-indigo-400");
+
     // Running status -> blue dot
-    const runningDot = options[0].querySelector("[aria-hidden='true']");
+    const runningDot = options[1].querySelector("[aria-hidden='true']");
     expect(runningDot).toBeInTheDocument();
     expect(runningDot!.className).toContain("bg-blue-400");
 
     // Completed status -> emerald dot
-    const completedDot = options[1].querySelector("[aria-hidden='true']");
+    const completedDot = options[2].querySelector("[aria-hidden='true']");
     expect(completedDot!.className).toContain("bg-emerald-400");
 
     // Failed status -> rose dot
-    const failedDot = options[2].querySelector("[aria-hidden='true']");
+    const failedDot = options[3].querySelector("[aria-hidden='true']");
     expect(failedDot!.className).toContain("bg-rose-400");
   });
 

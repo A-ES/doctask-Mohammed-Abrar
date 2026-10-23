@@ -74,7 +74,7 @@ _SYSTEM_PROMPT = """You are a compliance rule evaluator. You evaluate whether a 
 span violates a specific compliance rule.
 
 You MUST return a JSON object with the following fields:
-- "verdict": one of "pass", "fail", "not_applicable", or "insufficient_evidence"
+- "verdict": one of "pass", "fail", "not_applicable", "insufficient_evidence", or "review_required"
 - "cited_start": integer start offset (0-based, relative to the span start) of the relevant text
 - "cited_end": integer end offset (0-based, exclusive, relative to the span start) of the relevant text
 - "cited_text": the exact text from the span that is most relevant to the evaluation
@@ -82,6 +82,7 @@ You MUST return a JSON object with the following fields:
 
 If the rule is not applicable to this span, return verdict "not_applicable".
 If there is not enough information in the span to make a determination, return "insufficient_evidence".
+If a mandatory disclosure, required term, or required fact cannot be verified or is absent/missing, return "review_required".
 Only return "fail" if there is a clear violation of the rule in the span.
 
 Return ONLY valid JSON, no additional text."""
@@ -92,7 +93,7 @@ span violates one or more compliance rules.
 You MUST return a JSON array where each element corresponds to a rule (in the same order as provided) \
 with the following fields:
 - "rule_id": the id of the rule being evaluated
-- "verdict": one of "pass", "fail", "not_applicable", or "insufficient_evidence"
+- "verdict": one of "pass", "fail", "not_applicable", "insufficient_evidence", or "review_required"
 - "cited_start": integer start offset (0-based, relative to the span start) of the relevant text
 - "cited_end": integer end offset (0-based, exclusive, relative to the span start) of the relevant text
 - "cited_text": the exact text from the span that is most relevant to the evaluation
@@ -100,6 +101,7 @@ with the following fields:
 
 If a rule is not applicable to this span, return verdict "not_applicable" for that rule.
 If there is not enough information in the span to make a determination, return "insufficient_evidence".
+If a mandatory disclosure, required term, or required fact cannot be verified or is absent/missing, return "review_required".
 Only return "fail" if there is a clear violation of the rule in the span.
 
 Return ONLY a valid JSON array, no additional text."""

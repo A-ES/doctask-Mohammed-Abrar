@@ -121,6 +121,20 @@ function applySSEEvent(event: any, current: PipelineRunState | null): PipelineRu
     };
   }
 
+  if (type === 'run_paused') {
+    return {
+      run_id: event.run_id ?? current?.run_id ?? '',
+      current_node: event.current_node ?? current?.current_node ?? 'human_review',
+      node_status: 'completed',
+      completed_nodes: event.completed_nodes ?? current?.completed_nodes ?? [],
+      skipped_nodes: current?.skipped_nodes ?? [],
+      retries: current?.retries ?? {},
+      error_type: null,
+      error_detail: null,
+      run_status: 'paused',
+    };
+  }
+
   if (type === 'run_complete') {
     return {
       run_id: event.run_id ?? current?.run_id ?? '',
@@ -212,6 +226,18 @@ export function usePipelineState(runId: string | null): DerivedPipelineView {
     });
 
     es.addEventListener('node_complete', (e: MessageEvent) => {
+      if (!mountedRef.current) return;
+      try {
+        const data = JSON.parse(e.data);
+        setRunState((prev) => {
+          const updated = applySSEEvent(data, prev);
+          if (updated) emitTransitions(updated);
+          return updated;
+        });
+      } catch {}
+    });
+
+    es.addEventListener('run_paused', (e: MessageEvent) => {
       if (!mountedRef.current) return;
       try {
         const data = JSON.parse(e.data);

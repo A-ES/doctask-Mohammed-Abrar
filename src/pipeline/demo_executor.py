@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ from src.pipeline.history_sql import (
     emit_run_status_changed,
 )
 from src.pipeline.serialization import serialize_state
+from src.pipeline.span_resolution import resolve_span
 
 def _emit_history_event(fn, session_factory, state: dict, **kwargs) -> None:
     """Best-effort audit write with ONE retry.
@@ -80,56 +82,18 @@ logger = logging.getLogger(__name__)
 # Type alias for SSE broadcast callback
 SSECallback = Any  # Callable[[dict], Awaitable[None]] | None
 
+_active_runs: set[str] = set()
+_active_runs_lock = threading.Lock()
 
-async def run_pipeline(
-    run_id: str,
-    document_id: str,
-    document_version_id: str,
-    storage_path: str,
-    mime_type: str,
-    filename: str,
-    session_factory,
-    config_overrides: Optional[dict] = None,
-    sse_callback: Optional[SSECallback] = None,
-) -> PipelineState:
-    """Execute the full pipeline with real LLM calls.
 
-    Args:
-        run_id: UUID string for this pipeline run.
-        document_id: UUID string for the document.
-        document_version_id: UUID string for the version.
-        storage_path: Path to the document file on disk.
-        mime_type: MIME type of the document.
-        filename: Original filename.
-        session_factory: SQLAlchemy session factory for DB writes.
-        config_overrides: Optional config overrides.
-        sse_callback: Optional async callback to broadcast SSE events.
+def is_run_active(run_id: str) -> bool:
+    """Return True if run_id is currently executing in run_pipeline or resume_pipeline."""
+    with _active_runs_lock:
+        return run_id in _active_runs
 
-    Returns:
-        The final PipelineState after all nodes complete.
-    """
-    config = load_config(config_overrides)
 
-    state = create_initial_state(
-        run_id=run_id,
-        document_id=document_id,
-        document_version_id=document_version_id,
-        config=config,
-    )
-
-    # Update run status to running
-    await _update_run_status(session_factory, run_id, "running")
-    _emit_history_event(
-        emit_run_status_changed,
-        session_factory,
-        state,
-        run_id=run_id,
-        old_status="pending",
-        new_status="running",
-    )
-
-    # Define the node execution sequence
-    nodes = [
+def _get_pipeline_nodes() -> list[tuple[str, Any]]:
+    return [
         ("ingest", _node_ingest),
         ("extract_text", _node_extract_text),
         ("classify_document", _node_classify_document),
@@ -145,16 +109,19 @@ async def run_pipeline(
         ("finalize", _node_finalize),
     ]
 
-    # Context passed to nodes (avoid passing heavy deps through state)
-    ctx = {
-        "storage_path": storage_path,
-        "mime_type": mime_type,
-        "filename": filename,
-        "run_id": run_id,
-        "session_factory": session_factory,
-    }
 
-    for step_order, (node_name, node_fn) in enumerate(nodes, start=1):
+async def _execute_nodes_from(
+    state: PipelineState,
+    nodes: list[tuple[str, Any]],
+    start_index: int,
+    ctx: dict,
+    session_factory,
+    sse_callback: Optional[SSECallback],
+) -> PipelineState:
+    """Execute pipeline nodes starting from start_index sequentially."""
+    run_id = state["run_id"]
+
+    for step_order, (node_name, node_fn) in enumerate(nodes[start_index:], start=start_index + 1):
         # Cooperative cancellation check between nodes
         if is_cancelled(run_id):
             await _update_run_status(session_factory, run_id, "cancelled")
@@ -221,6 +188,7 @@ async def run_pipeline(
             )
 
         # Broadcast: node completed
+        is_paused = (node_name == "human_review" and bool(state.get("_is_paused")))
         await _broadcast(sse_callback, {
             "type": "node_complete",
             "run_id": run_id,
@@ -232,8 +200,28 @@ async def run_pipeline(
             "completed_nodes": state.get("completed_nodes", []),
             "current_node": state.get("current_node", ""),
             "error_detail": state.get("error_detail"),
-            "run_status": "running",
+            "run_status": "paused" if is_paused else "running",
         })
+
+        # If human_review enqueued pending items, pause pipeline
+        if is_paused:
+            await _update_run_status(session_factory, run_id, "paused")
+            _emit_history_event(
+                emit_run_status_changed,
+                session_factory,
+                state,
+                run_id=run_id,
+                old_status="running",
+                new_status="paused",
+            )
+            await _broadcast(sse_callback, {
+                "type": "run_paused",
+                "run_id": run_id,
+                "status": "paused",
+                "current_node": node_name,
+                "completed_nodes": state.get("completed_nodes", []),
+            })
+            return state
 
         # If node errored with permanent error, stop pipeline
         if state["node_status"] == "error" and state.get("error_type") == "permanent":
@@ -264,16 +252,290 @@ async def run_pipeline(
         state,
         run_id=run_id,
         old_status="running",
-        new_status="completed",
+        new_status=final_status,
     )
     await _broadcast(sse_callback, {
         "type": "run_complete",
         "run_id": run_id,
-        "status": "completed",
+        "status": final_status,
         "completed_nodes": state.get("completed_nodes", []),
     })
 
     return state
+
+
+async def run_pipeline(
+    run_id: str,
+    document_id: str,
+    document_version_id: str,
+    storage_path: str,
+    mime_type: str,
+    filename: str,
+    session_factory,
+    config_overrides: Optional[dict] = None,
+    sse_callback: Optional[SSECallback] = None,
+) -> Optional[PipelineState]:
+    """Execute the full pipeline with real LLM calls."""
+    global _active_runs
+    with _active_runs_lock:
+        if run_id in _active_runs:
+            logger.info("Run %s is already active; ignoring duplicate execution.", run_id)
+            return None
+        _active_runs.add(run_id)
+
+    try:
+        config = load_config(config_overrides)
+
+        state = create_initial_state(
+            run_id=run_id,
+            document_id=document_id,
+            document_version_id=document_version_id,
+            config=config,
+        )
+
+        # Update run status to running
+        await _update_run_status(session_factory, run_id, "running")
+        _emit_history_event(
+            emit_run_status_changed,
+            session_factory,
+            state,
+            run_id=run_id,
+            old_status="pending",
+            new_status="running",
+        )
+
+        nodes = _get_pipeline_nodes()
+        ctx = {
+            "storage_path": storage_path,
+            "mime_type": mime_type,
+            "filename": filename,
+            "run_id": run_id,
+            "session_factory": session_factory,
+        }
+
+        return await _execute_nodes_from(state, nodes, 0, ctx, session_factory, sse_callback)
+    finally:
+        with _active_runs_lock:
+            _active_runs.discard(run_id)
+
+
+def _enrich_state_with_decisions(state: PipelineState, run_id: str, session_factory) -> None:
+    """Load human reviewer decisions into state and claims."""
+    decisions_list: list[Decision] = []
+    decisions_by_claim: dict[str, str] = {}
+
+    # 1. From approval_service if available
+    try:
+        from src.pipeline.approval_api import get_approval_service as _get_svc
+        svc = _get_svc()
+        if svc is not None:
+            items = svc.get_all(run_id)
+            for item in items:
+                if item.decision:
+                    cid = (
+                        item.payload.get("details", {}).get("claim_id")
+                        or item.payload.get("claim_id")
+                    )
+                    d_val = item.decision.value if hasattr(item.decision, "value") else str(item.decision)
+                    if cid:
+                        decisions_by_claim[cid] = d_val
+                        decisions_list.append({
+                            "claim_id": cid,
+                            "approval_queue_id": item.id,
+                            "decision_value": d_val,
+                            "reviewer_id": item.reviewer_id or "reviewer",
+                            "justification": item.justification or "",
+                        })
+    except Exception as e:
+        logger.debug("Could not read decisions from approval service: %s", e)
+
+    # 2. From database if not found or in addition
+    if not decisions_by_claim and session_factory is not None:
+        try:
+            session = session_factory()
+            try:
+                from sqlalchemy import text
+                rows = session.execute(
+                    text("""
+                        SELECT id, payload, status, decision, reviewer_id, justification
+                        FROM approval_queue
+                        WHERE run_id = :run_id AND status IN ('approved', 'rejected')
+                    """),
+                    {"run_id": uuid.UUID(run_id)},
+                ).fetchall()
+                for row in rows:
+                    payload = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+                    cid = payload.get("details", {}).get("claim_id") or payload.get("claim_id")
+                    d_val = row[3] or row[2]
+                    if cid and d_val:
+                        decisions_by_claim[cid] = str(d_val)
+                        decisions_list.append({
+                            "claim_id": cid,
+                            "approval_queue_id": str(row[0]),
+                            "decision_value": str(d_val),
+                            "reviewer_id": row[4] or "reviewer",
+                            "justification": row[5] or "",
+                        })
+            finally:
+                session.close()
+        except Exception as e:
+            logger.debug("Could not read decisions from DB: %s", e)
+
+    # Reflect into state["decisions"]
+    existing_decisions = list(state.get("decisions", []))
+    existing_cids = {d.get("claim_id") for d in existing_decisions}
+    for d in decisions_list:
+        if d["claim_id"] not in existing_cids:
+            existing_decisions.append(d)
+    state["decisions"] = existing_decisions
+
+    # Reflect into state["claims"]
+    claims = list(state.get("claims", []))
+    for claim in claims:
+        cid = claim.get("claim_id")
+        if cid in decisions_by_claim:
+            claim["decision"] = decisions_by_claim[cid]
+    state["claims"] = claims
+
+
+async def resume_pipeline(
+    run_id: str,
+    session_factory,
+    sse_callback: Optional[SSECallback] = None,
+) -> Optional[PipelineState]:
+    """Resume an existing pipeline run from its last checkpoint."""
+    global _active_runs
+    with _active_runs_lock:
+        if run_id in _active_runs:
+            logger.info("Run %s is already active; ignoring duplicate resume.", run_id)
+            return None
+        _active_runs.add(run_id)
+
+    try:
+        from src.pipeline.stores import SQLResumeStore
+        from src.pipeline.resume import resume_run, ResumeLockError
+        from src.models.runs import Run
+        from src.models.documents import Document, DocumentVersion
+        from sqlalchemy import select
+
+        store = SQLResumeStore(session_factory)
+
+        session = session_factory()
+        try:
+            run = session.execute(
+                select(Run).where(Run.id == uuid.UUID(run_id))
+            ).scalar_one_or_none()
+            if not run:
+                logger.error("Cannot resume: Run %s not found in DB", run_id)
+                return None
+            if run.status not in ("paused", "running"):
+                logger.warning("Cannot resume run %s: status is '%s'", run_id, run.status)
+                return None
+            previous_status = run.status
+        finally:
+            session.close()
+
+        try:
+            result = resume_run(store, run_id)
+        except ResumeLockError as e:
+            logger.warning("Resume lock error for run %s: %s", run_id, e)
+            return None
+
+        state = result.state
+        state["_is_paused"] = False
+        next_node = result.next_node
+
+        if previous_status == "paused":
+            await _update_run_status(session_factory, run_id, "running")
+            _emit_history_event(
+                emit_run_status_changed,
+                session_factory,
+                state,
+                run_id=run_id,
+                old_status="paused",
+                new_status="running",
+            )
+
+        _enrich_state_with_decisions(state, run_id, session_factory)
+
+        ctx = {
+            "storage_path": "",
+            "mime_type": "",
+            "filename": "",
+            "run_id": run_id,
+            "session_factory": session_factory,
+        }
+        try:
+            session = session_factory()
+            try:
+                doc_id = state.get("document_id")
+                ver_id = state.get("document_version_id")
+                if doc_id:
+                    doc = session.execute(
+                        select(Document).where(Document.id == uuid.UUID(doc_id))
+                    ).scalar_one_or_none()
+                    if doc:
+                        ctx["filename"] = doc.filename
+                if ver_id:
+                    ver = session.execute(
+                        select(DocumentVersion).where(DocumentVersion.id == uuid.UUID(ver_id))
+                    ).scalar_one_or_none()
+                    if ver:
+                        ctx["storage_path"] = ver.storage_path
+                        ctx["mime_type"] = ver.mime_type
+            finally:
+                session.close()
+        except Exception as e:
+            logger.debug("Failed to populate doc context on resume: %s", e)
+
+        nodes = _get_pipeline_nodes()
+        node_names = [n[0] for n in nodes]
+        start_index = node_names.index(next_node) if next_node in node_names else len(nodes)
+
+        if start_index >= len(nodes):
+            logger.info("All nodes already completed for run %s", run_id)
+            return state
+
+        return await _execute_nodes_from(state, nodes, start_index, ctx, session_factory, sse_callback)
+
+    finally:
+        with _active_runs_lock:
+            _active_runs.discard(run_id)
+
+
+def dispatch_resume_task(run_id: str, background_tasks: Any = None) -> None:
+    """Dispatch resume_pipeline in a background task."""
+    from src.database import SessionLocal
+
+    async def _runner():
+        async def sse_callback(data: dict) -> None:
+            try:
+                from src.main import broadcast_sse
+                await broadcast_sse(run_id, data)
+            except Exception:
+                pass
+
+        try:
+            logger.info("Starting background resume for run %s", run_id)
+            await resume_pipeline(
+                run_id=run_id,
+                session_factory=SessionLocal,
+                sse_callback=sse_callback,
+            )
+            logger.info("Completed background resume for run %s", run_id)
+        except Exception as e:
+            logger.exception("Error in background resume for run %s: %s", run_id, e)
+
+    if background_tasks is not None:
+        background_tasks.add_task(_runner)
+    else:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_runner())
+        except RuntimeError:
+            import threading
+            t = threading.Thread(target=lambda: asyncio.run(_runner()), daemon=True)
+            t.start()
 
 
 # ─── Node implementations ────────────────────────────────────────────────────
@@ -564,8 +826,11 @@ Extract ALL factual claims — amounts, rates, dates, party names, obligations, 
         """Resolve a claim's true document-level span.
 
         Tries the full extracted text first, then chunk-local search with
-        proper chunk-start offset math. Returns (start, end,
-        citation_status); unverifiable spans are (0, 0).
+        proper chunk-start offset math. Falls back to token-anchor fuzzy
+        matching — LLMs paraphrase claims ("X is Y" for source "X: Y"),
+        and exact-substring-only lookup marked supported claims
+        unverifiable. Returns (start, end, citation_status); unverifiable
+        spans are (0, 0).
         """
         if claim_text:
             pos = full_text.find(claim_text)
@@ -576,6 +841,9 @@ Extract ALL factual claims — amounts, rates, dates, party names, obligations, 
                 if local >= 0:
                     start = c["start_offset"] + local
                     return start, start + len(claim_text), "grounded"
+            fuzzy = resolve_span(claim_text, full_text)
+            if fuzzy is not None:
+                return fuzzy[0], fuzzy[1], "grounded"
         return 0, 0, "unverifiable"
 
     # Process chunks (batch up to 5 at a time to avoid too many API calls)
@@ -735,8 +1003,9 @@ For each claim, provide a compliance verdict:
 - "compliant" — claim is within regulatory bounds
 - "non_compliant" — claim violates a rule
 - "indeterminate" — cannot determine compliance without more context
+- "review_required" — missing mandatory disclosure, absent required term, or unverifiable fact
 
-Respond with JSON: {"verdicts": [{"claim_id": "...", "verdict": "compliant|non_compliant|indeterminate", "confidence": 0.0-1.0, "rule_id": "RULE-X", "reason": "..."}]}"""
+Respond with JSON: {"verdicts": [{"claim_id": "...", "verdict": "compliant|non_compliant|indeterminate|review_required", "confidence": 0.0-1.0, "rule_id": "RULE-X", "reason": "..."}]}"""
 
     try:
         result, inp_tokens, out_tokens = await chat_completion_json(
@@ -752,11 +1021,11 @@ Respond with JSON: {"verdicts": [{"claim_id": "...", "verdict": "compliant|non_c
         for v in raw_verdicts:
             claim_id = v.get("claim_id", "")
             verdict_val = v.get("verdict", "indeterminate")
-            if verdict_val not in ("compliant", "non_compliant", "indeterminate"):
+            if verdict_val not in ("compliant", "non_compliant", "indeterminate", "review_required"):
                 verdict_val = "indeterminate"
 
             confidence = float(v.get("confidence", 0.5))
-            needs_review = verdict_val == "non_compliant" or confidence < 0.7
+            needs_review = verdict_val in ("non_compliant", "review_required") or confidence < 0.7
 
             verdicts.append(ComplianceVerdict(
                 claim_id=claim_id,
@@ -767,8 +1036,8 @@ Respond with JSON: {"verdicts": [{"claim_id": "...", "verdict": "compliant|non_c
                 evidence_refs=[],
             ))
 
-            # Non-compliant claims become findings
-            if verdict_val == "non_compliant":
+            # Non-compliant and review_required claims become findings
+            if verdict_val in ("non_compliant", "review_required"):
                 findings.append({
                     "claim_id": claim_id,
                     "rule_id": v.get("rule_id", ""),
@@ -782,19 +1051,37 @@ Respond with JSON: {"verdicts": [{"claim_id": "...", "verdict": "compliant|non_c
 
     except Exception as e:
         logger.warning("Rule matching LLM failed (using fallback): %s", e)
-        # Fallback: mark all claims as indeterminate
+        # Fallback: missing or not_found claims get review_required, others indeterminate
         verdicts = []
         findings = []
         for claim in claims:
             claim_id = claim["claim_id"]
+            claim_text = claim.get("claim_text", "")
+            is_missing = "not_found" in claim_text or claim.get("confidence", 1.0) == 0.0
+            verdict_val = "review_required" if is_missing else "indeterminate"
+            rule_id = (
+                "MF-002" if "fee" in claim_text.lower()
+                else "MF-001" if "rate" in claim_text.lower() or "apr" in claim_text.lower()
+                else "MF-003" if "modification" in claim_text.lower()
+                else None
+            )
             verdicts.append(ComplianceVerdict(
                 claim_id=claim_id,
-                verdict="indeterminate",
-                confidence=0.5,
+                verdict=verdict_val,
+                confidence=0.0 if is_missing else 0.5,
                 needs_human_review=True,
-                rule_id=None,
+                rule_id=rule_id,
                 evidence_refs=[],
             ))
+            if is_missing:
+                findings.append({
+                    "claim_id": claim_id,
+                    "rule_id": rule_id or "MF-002",
+                    "verdict": "review_required",
+                    "reason": f"Required fact missing or not found: {claim_text}",
+                    "source": "match_rules",
+                    "evaluation_method": "structured",
+                })
         inp_tokens = 0
         out_tokens = 0
 
@@ -845,13 +1132,14 @@ Look for:
 3. Ambiguous or misleading language
 4. Terms that conflict with standard regulations
 
-For each violation found in the source text, provide:
+For each violation or required review item found in the source text, provide:
 - finding_type: "contradiction" | "missing_disclosure" | "misleading_language" | "regulatory_violation"
+- verdict: "fail" | "review_required"
 - description: What the issue is
 - section_index: Which section contains the issue
 - severity: "high" | "medium" | "low"
 
-Respond with JSON: {"findings": [{"finding_type": "...", "description": "...", "section_index": 0, "severity": "..."}]}
+Respond with JSON: {"findings": [{"finding_type": "...", "verdict": "...", "description": "...", "section_index": 0, "severity": "..."}]}
 If no issues found, return {"findings": []}"""
 
     try:
@@ -863,8 +1151,12 @@ If no issues found, return {"findings": []}"""
 
         source_findings = []
         for f in result.get("findings", []):
+            v_val = f.get("verdict")
+            if not v_val:
+                v_val = "review_required" if f.get("finding_type") == "missing_disclosure" else "fail"
             source_findings.append({
                 "finding_type": f.get("finding_type", ""),
+                "verdict": v_val,
                 "description": f.get("description", ""),
                 "section_index": f.get("section_index", 0),
                 "severity": f.get("severity", "medium"),
@@ -938,7 +1230,7 @@ async def _node_score_confidence(state: PipelineState, ctx: dict) -> PipelineSta
         updated = dict(v)
         if v["confidence"] < threshold:
             updated["needs_human_review"] = True
-        if v["verdict"] == "non_compliant":
+        if v["verdict"] in ("non_compliant", "review_required"):
             updated["needs_human_review"] = True
         refined_verdicts.append(ComplianceVerdict(**updated))  # type: ignore[arg-type]
 
@@ -976,7 +1268,7 @@ async def _node_route_to_queue(state: PipelineState, ctx: dict) -> PipelineState
 
         if v is None:
             escalate.append(claim_id)
-        elif v["verdict"] == "non_compliant" or v.get("needs_human_review"):
+        elif v["verdict"] in ("non_compliant", "review_required") or v.get("needs_human_review"):
             escalate.append(claim_id)
         elif v["confidence"] < threshold:
             escalate.append(claim_id)
@@ -1014,11 +1306,12 @@ async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
     escalated = state.get("queue_buckets", {}).get("escalate", [])
     run_id = ctx.get("run_id") or state.get("run_id", "")
 
-    # Get approval service (set during app lifespan)
-    try:
-        approval_service = _get_svc()
-    except Exception:
-        approval_service = None
+    approval_service = ctx.get("approval_service")
+    if approval_service is None:
+        try:
+            approval_service = _get_svc()
+        except Exception:
+            approval_service = None
 
     # Enqueue each escalated claim as a pending approval item.
     # Dedup by claim_id — same guarantee as the populate-queue backfill
@@ -1079,6 +1372,9 @@ async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
             existing_claim_ids.add(claim_id)
         # No decision yet — items stay pending for human review
 
+    pending_items = approval_service.get_pending(run_id) if approval_service is not None else []
+    is_paused = len(pending_items) > 0
+
     completed = list(state.get("completed_nodes", []))
     completed.append("human_review")
 
@@ -1091,6 +1387,7 @@ async def _node_human_review(state: PipelineState, ctx: dict) -> PipelineState:
         "error_detail": None,
         "completed_nodes": completed,
         "_last_node_metrics": None,
+        "_is_paused": is_paused,
     })
 
 
@@ -1137,6 +1434,7 @@ async def _node_finalize(state: PipelineState, ctx: dict) -> PipelineState:
         "error_detail": None,
         "completed_nodes": completed,
         "_last_node_metrics": None,
+        "_is_paused": False,
     })
 
 

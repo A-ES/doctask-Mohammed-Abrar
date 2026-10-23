@@ -25,6 +25,39 @@ from sqlalchemy.orm import Session
 from src.database import SessionLocal
 from src.models.documents import Document, DocumentVersion
 
+DEFAULT_MAX_UPLOAD_SIZE = 25 * 1024 * 1024  # 25MB
+
+
+def get_max_upload_size() -> int:
+    try:
+        return int(os.environ.get("MAX_UPLOAD_SIZE_BYTES", DEFAULT_MAX_UPLOAD_SIZE))
+    except (ValueError, TypeError):
+        return DEFAULT_MAX_UPLOAD_SIZE
+
+
+async def _read_file_with_limit(file: UploadFile, max_size: int) -> bytes:
+    if file.size is not None and file.size > max_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum allowed size of {max_size} bytes (got {file.size} bytes)",
+        )
+    chunks: list[bytes] = []
+    total_size = 0
+    chunk_size = 64 * 1024
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total_size += len(chunk)
+        if total_size > max_size:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum allowed size of {max_size} bytes",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 # Upload directory (relative to project root)
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))
 
@@ -88,8 +121,9 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
             f"Allowed: {sorted(ALLOWED_MIME_TYPES)}",
         )
 
-    # Read file content
-    content = await file.read()
+    # Read file content with size limit
+    max_size = get_max_upload_size()
+    content = await _read_file_with_limit(file, max_size)
     if len(content) == 0:
         raise HTTPException(status_code=422, detail="File is empty")
 
